@@ -1,10 +1,15 @@
 #![deny(missing_docs)]
 //! Model
 /// This struct represents an RDF triple
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Ord, PartialOrd)]
 pub struct Triple {
+    // the ord and partialOrd needed to allow the creation of a 
+    // differential dataflow collection
+    /// subject of the triple
     pub subject: String,
+    /// predicate of the triple
     pub predicate: String,
+    /// object of the triple
     pub object: String,
 }
 
@@ -39,7 +44,9 @@ impl fmt::Display for Triple{
 /// body that is two literals
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct CustomRule {
+    /// head of the rule
     pub head: CustomLiteral,
+    /// body of the rule
     pub body: [CustomLiteral; 2],
 }
 
@@ -56,6 +63,7 @@ impl std::fmt::Display for CustomRule {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct CustomLiteral{
     // for now I'm going to model all of this with strings
+    /// terms of the literal
     pub tuple_of_terms: [PossibleTerm; 3],
 }
 
@@ -67,10 +75,14 @@ impl std::fmt::Display for CustomLiteral {
 /// a constant value is an alias for a string for now
 pub type ConstantValue = String;
 #[derive(PartialEq, Eq, Hash, Debug)]
+/// Possible terms
 pub enum PossibleTerm {
+    /// A variable
     LiteralVariable(String),
+    /// A rho-df property
     RhoDFProperty(RhoDFWord),
     // We don't have constant values in our case..
+    /// constant value
     ConstantValue,
 }
 
@@ -88,10 +100,15 @@ impl std::fmt::Display for PossibleTerm {
 /// Words in rho-df. Maybe better if they were integer ids.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum RhoDFWord{
+    /// rdfs:subPropertyOf
     SPO,
+    /// rdfs:subClassOf
     SCO,
+    /// rdfs:type
     TYPE,
+    /// rdfs:domain
     DOMAIN,
+    /// rdfs:range
     RANGE,
 }
 

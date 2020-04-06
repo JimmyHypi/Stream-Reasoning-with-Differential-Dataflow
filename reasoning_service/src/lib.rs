@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 //! Functions and definitions
-mod model;
+pub mod model;
 
 use rio_xml::{RdfXmlParser, RdfXmlError};
 use rio_api::parser::TriplesParser;
