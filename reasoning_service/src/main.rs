@@ -208,12 +208,90 @@ fn main(){
                 /*******************************************************************************************************/
 
 
+                /*******************************************************************************************************/
+                /*                           T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)                               */
+                /*******************************************************************************************************/
+                
+                let only_domain =
+                    t_box
+                        .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#domain>")
+                        ;
 
+                let domain_type_rule = 
+                        a_box
+                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                            .iterate(|inner| {
+                                let only_domain_in =
+                                     only_domain.enter(&inner.scope())
+                                                .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                ;
 
+                                inner
+                                    .map(|(a, p, b)| (p, (a, b)))
+                                    .join(&only_domain_in.map(|(p, dom, d)| (p, (dom, d))))
+                                    .map(|(_key, ((a, _b), (_dom, d)))| (a, String::from("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"), d))
+                                    .concat(&inner)
+                                    .distinct()
+                            })
+                            .map(|(x, y, j)| {
+                                reasoning_service::model::Triple {
+                                    subject: x,
+                                    predicate: y,
+                                    object: j,
+                                }
+                            })
+                            // .inspect(|triple| (triple.0).print_easy_reading())
+
+                ;
+
+                /*******************************************************************************************************/
+
+                /*******************************************************************************************************/
+                /*                           T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)                               */
+                /*******************************************************************************************************/
+                
+                let only_range =
+                    t_box
+                        .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#range>")
+                        ;
+
+                let range_type_rule = 
+                        a_box
+                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                            .iterate(|inner| {
+                                let only_range_in =
+                                     only_range.enter(&inner.scope())
+                                                .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                ;
+
+                                inner
+                                    .map(|(a, p, b)| (p, (a, b)))
+                                    .join(&only_range_in.map(|(p, ran, r)| (p, (ran, r))))
+                                    .map(|(_key, ((_a, b), (_ran, r)))| (b, String::from("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"), r))
+                                    .concat(&inner)
+                                    .distinct()
+                            })
+                            .map(|(x, y, j)| {
+                                reasoning_service::model::Triple {
+                                    subject: x,
+                                    predicate: y,
+                                    object: j,
+                                }
+                            })
+                            // .inspect(|triple| (triple.0).print_easy_reading())
+
+                ;
+
+                /*******************************************************************************************************/
+
+                
+                
                 sco_transitive_closure
                     .concat(&spo_transitive_closure)
                     .concat(&sco_type_rule)
                     .concat(&spo_type_rule)
+                    .concat(&domain_type_rule)
+                    .concat(&range_type_rule)
                     // TODO: Impement all the traits necessary to apply distinct directly on collections of triples
                     .map(|triple| (triple.subject, triple.predicate, triple.object))
                     .distinct()
