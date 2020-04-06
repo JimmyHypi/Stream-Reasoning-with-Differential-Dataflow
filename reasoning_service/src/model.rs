@@ -18,7 +18,11 @@ impl Triple {
     pub fn print_easy_reading(&self) {
         if let Some(n) = self.subject.as_str().find('#') {
             print!("{} ", &(self.subject.as_str())[n..self.subject.as_str().len()-1]);
-        } 
+        } else {
+            // something like <http://www.Department0.University0.edu/FullProfessor7>
+            let res: Vec<&str> = self.subject.as_str().split('/').collect();
+            print!("{} ", &(res[res.len()-1])[..(res[res.len()-1].len()-1)]);
+        }
         if let Some(n) = self.predicate.as_str().find('#') {
             print!("{} ", &(self.predicate.as_str())[n..self.predicate.as_str().len()-1]);
         }

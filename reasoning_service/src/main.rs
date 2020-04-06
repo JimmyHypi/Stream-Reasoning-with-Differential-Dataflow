@@ -130,13 +130,111 @@ fn main(){
                         ;
 
 
+                /*******************************************************************************************************/
+
+
+
+
+
+
+
+                /*******************************************************************************************************/
+                /*                             T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)                             */
+                /*******************************************************************************************************/
+
+                let sco_type_rule = 
+                        a_box
+                            .filter(|triple| triple.predicate == "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>")
+                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                            .iterate(|inner| {
+                                let sco_transitive_closure_in =
+                                     sco_transitive_closure
+                                        .enter(&inner.scope())
+                                        .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                ;
+
+                                inner
+                                    .map(|(subj, pred, obj)| (obj, (subj, pred)))
+                                    .join(&sco_transitive_closure_in.map(|(subj, pred, obj)| (subj, (pred, obj))))
+                                    .map(|(key, ((x, typ), (sco, b)))| (x, typ, b))
+                                    .concat(&inner)
+                                    .distinct()
+                            })
+                            .map(|(x, y, j)| {
+                                reasoning_service::model::Triple {
+                                    subject: x,
+                                    predicate: y,
+                                    object: j,
+                                }
+                            })
+                ;
+
+                /*******************************************************************************************************/
+                
+
+
+                /*******************************************************************************************************/
+                /*                             T(x, p, b) <= T(p1, SPO, p),T(x, p1, y)                                 */
+                /*******************************************************************************************************/
+
+                let spo_type_rule = 
+                        a_box
+                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                            .iterate(|inner| {
+                                let spo_transitive_closure_in =
+                                     spo_transitive_closure
+                                        .enter(&inner.scope())
+                                        .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                ;
+
+                                inner
+                                    .map(|(x, p1, y)| (p1, (x, y)))
+                                    .join(&spo_transitive_closure_in.map(|(p1, spo, p)| (p1, (spo, p))))
+                                    .map(|(_key, ((x, y), (_spo, p)))| (x, p, y))
+                                    .concat(&inner)
+                                    .distinct()
+                            })
+                            .map(|(x, y, j)| {
+                                reasoning_service::model::Triple {
+                                    subject: x,
+                                    predicate: y,
+                                    object: j,
+                                }
+                            })
+                            // .inspect(|triple| (triple.0).print_easy_reading())
+
+                ;
+
+                /*******************************************************************************************************/
+
+
+
+
+                sco_transitive_closure
+                    .concat(&spo_transitive_closure)
+                    .concat(&sco_type_rule)
+                    .concat(&spo_type_rule)
+                    // TODO: Impement all the traits necessary to apply distinct directly on collections of triples
+                    .map(|triple| (triple.subject, triple.predicate, triple.object))
+                    .distinct()
+                    .map(|(x, y, j)| {
+                        reasoning_service::model::Triple {
+                            subject: x,
+                            predicate: y,
+                            object: j,
+                        }
+                    })
+                    .inspect(|triple| (triple.0).print_easy_reading())
+                    ;
+
+
                 (a_box_input, t_box_input)
 
             });
 
 
             let a_box = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\test_for_simple_reasoning.nt", index, peers);
-            let t_box = reasoning_service::load_ontology("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\univ-bench-oversimple.owl");
+            let t_box = reasoning_service::load_ontology("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\univ-bench.owl");
 
             if index == 0 {
                 println!("Load time: {}ms", timer.elapsed().as_millis());
