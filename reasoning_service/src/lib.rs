@@ -12,7 +12,7 @@ use std::fs::File;
 ///     - No repeated value in the A_Box
 ///     - Data uses only ASCII characters
 /// function to load the data, parallelized with respect to the number of workers.
-pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Triple>{
+pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Triple> {
     use std::io::BufRead;
 
     let mut returning_data = Vec::new();

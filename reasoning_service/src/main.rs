@@ -26,7 +26,7 @@ fn main(){
             let peers = worker.peers(); 
 
             // Track progress
-            // let mut probe = timely::dataflow::ProbeHandle::new();
+            let mut probe = timely::dataflow::ProbeHandle::new();
 
             let (mut a_box_input, mut t_box_input) = worker.dataflow::<usize,_,_>(|scope| {
 
@@ -302,7 +302,8 @@ fn main(){
                             object: j,
                         }
                     })
-                    .inspect(|triple| (triple.0).print_easy_reading())
+                    // .inspect(|triple| (triple.0).print_easy_reading())
+                    .probe_with(&mut probe)
                     ;
 
 
@@ -311,7 +312,15 @@ fn main(){
             });
 
 
-            let a_box = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\test_for_simple_reasoning.nt", index, peers);
+            let mut a_box: Vec<reasoning_service::model::Triple> = Vec::new(); 
+            
+            for i in 0..15 {
+                a_box.append(&mut reasoning_service::load_data(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\generated_lubm_data_ntriples\\University0_{}.nt", i), index, peers));
+            }
+
+            println!("ABox triples: {}", a_box.len());
+            
+            
             let t_box = reasoning_service::load_ontology("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\univ-bench.owl");
 
             if index == 0 {
@@ -326,6 +335,19 @@ fn main(){
             for triple in t_box {
                 t_box_input.insert(triple);
             }
+
+            a_box_input.advance_to(1); a_box_input.flush();
+            t_box_input.advance_to(1); t_box_input.flush();
+
+            while probe.less_than(a_box_input.time()) {
+                worker.step();
+            }
+
+            if index == 0 {
+
+                println!("Full materialization time: {}ms", timer.elapsed().as_millis());
+                timer = std::time::Instant::now();
+            }  
 
         }).expect("Couldn't run timely dataflow correctly");
 
