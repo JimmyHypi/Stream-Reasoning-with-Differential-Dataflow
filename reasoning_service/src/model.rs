@@ -1,7 +1,8 @@
 #![deny(missing_docs)]
 //! Model
+use abomonation_derive::*;
 /// This struct represents an RDF triple
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Ord, PartialOrd)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Ord, PartialOrd, Abomonation)]
 pub struct Triple {
     // the ord and partialOrd needed to allow the creation of a 
     // differential dataflow collection
