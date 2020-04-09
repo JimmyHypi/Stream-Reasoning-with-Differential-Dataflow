@@ -52,74 +52,55 @@ fn main(){
 
             let sco_transitive_closure =        
                 t_box
-                    // consider only the triples that have SCO as predicate as only them are going to be affected
-                    .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#subClassOf>")
-                    .map(|triple| (triple.subject, triple.predicate, triple.object))
+                    .filter(|triple| triple.predicate == reasoning_service::model::RDFS_SUB_CLASS_OF)
                     .iterate(|inner| {
                         
                         inner 
-                            .map(|(subj, pred, obj)| (obj, (subj, pred)))
-                            .join(&inner.map(|(subj, pred, obj)| (subj, (pred, obj))))
-                            .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| (subj1, pred1, obj2))
+                            .map(|triple| (triple.object, (triple.subject, triple.predicate)))
+                            .join(&inner.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                            .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| 
+                                reasoning_service::model::Triple {
+                                    subject: subj1,
+                                    predicate: pred1,
+                                    object: obj2,
+                                }
+                            )
                             .concat(&inner)
                             .distinct()
 
 
                     })
-                    // .inspect(|triple| println!("{:?}", triple))
-                    .map(|(x, y, j)| {
-                        reasoning_service::model::Triple {
-                            subject: x,
-                            predicate: y,
-                            object: j,
-                        }
-                    })
-                    // .inspect(|triple| (triple.0).print_easy_reading())
                     ;
-
 
             /*******************************************************************************************************/
                 
 
-
-
             /*******************************************************************************************************/
             /*                             T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)                               */
             /*******************************************************************************************************/
-
             let spo_transitive_closure = 
                 t_box
-                    .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#subPropertyOf>")
-                    .map(|triple| (triple.subject, triple.predicate, triple.object))
+                    .filter(|triple| triple.predicate == reasoning_service::model::RDFS_SUB_PROPERTY_OF)
                     .iterate(|inner| {
                                         
                         inner 
-                            .map(|(subj, pred, obj)| (obj, (subj, pred)))
-                            .join(&inner.map(|(subj, pred, obj)| (subj, (pred, obj))))
-                            .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| (subj1, pred1, obj2))
+                            .map(|triple| (triple.object, (triple.subject, triple.predicate)))
+                            .join(&inner.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                            .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| 
+                                reasoning_service::model::Triple {
+                                    subject: subj1,
+                                    predicate: pred1,
+                                    object: obj2,
+                                }
+                            )
                             .concat(&inner)
                             .distinct()
                         
                         
                     })
-                    // .inspect(|triple| println!("{:?}", triple))
-                    .map(|(x, y, j)| {
-                        reasoning_service::model::Triple {
-                            subject: x,
-                            predicate: y,
-                            object: j,
-                        }
-                    })
-                    // .inspect(|triple| (triple.0).print_easy_reading())
                     ;
 
-
             /*******************************************************************************************************/
-
-
-
-
-
 
 
             /*******************************************************************************************************/
@@ -128,34 +109,30 @@ fn main(){
 
             let sco_type_rule = 
                     a_box
-                        .filter(|triple| triple.predicate == "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>")
-                        .map(|triple| (triple.subject, triple.predicate, triple.object))
+                        .filter(|triple| triple.predicate == reasoning_service::model::RDF_TYPE)
                         .iterate(|inner| {
                             let sco_transitive_closure_in =
                                  sco_transitive_closure
                                     .enter(&inner.scope())
-                                    .map(|triple| (triple.subject, triple.predicate, triple.object))
                             ;
 
                             inner
-                                .map(|(subj, pred, obj)| (obj, (subj, pred)))
-                                .join(&sco_transitive_closure_in.map(|(subj, pred, obj)| (subj, (pred, obj))))
-                                .map(|(_key, ((x, typ), (_sco, b)))| (x, typ, b))
+                                .map(|triple| (triple.object, (triple.subject, triple.predicate)))
+                                .join(&sco_transitive_closure_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                                .map(|(_key, ((x, typ), (_sco, b)))| 
+                                    reasoning_service::model::Triple {
+                                        subject: x,
+                                        predicate: typ,
+                                        object: b
+                                    }
+                                )
                                 .concat(&inner)
                                 .distinct()
                         })
-                        .map(|(x, y, j)| {
-                            reasoning_service::model::Triple {
-                                subject: x,
-                                predicate: y,
-                                object: j,
-                            }
-                        })
-            ;
+                        ;
 
             /*******************************************************************************************************/
                 
-
 
             /*******************************************************************************************************/
             /*                             T(x, p, b) <= T(p1, SPO, p),T(x, p1, y)                                 */
@@ -163,30 +140,25 @@ fn main(){
 
             let spo_type_rule = 
                     a_box
-                        .map(|triple| (triple.subject, triple.predicate, triple.object))
                         .iterate(|inner| {
                             let spo_transitive_closure_in =
                                  spo_transitive_closure
                                     .enter(&inner.scope())
-                                    .map(|triple| (triple.subject, triple.predicate, triple.object))
                             ;
 
                             inner
-                                .map(|(x, p1, y)| (p1, (x, y)))
-                                .join(&spo_transitive_closure_in.map(|(p1, spo, p)| (p1, (spo, p))))
-                                .map(|(_key, ((x, y), (_spo, p)))| (x, p, y))
+                                .map(|triple| (triple.predicate, (triple.subject, triple.object)))
+                                .join(&spo_transitive_closure_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                                .map(|(_key, ((x, y), (_spo, p)))| 
+                                    reasoning_service::model::Triple {
+                                        subject: x,
+                                        predicate: p,
+                                        object: y,
+                                    }
+                                )
                                 .concat(&inner)
                                 .distinct()
                         })
-                        .map(|(x, y, j)| {
-                            reasoning_service::model::Triple {
-                                subject: x,
-                                predicate: y,
-                                object: j,
-                            }
-                        })
-                        // .inspect(|triple| (triple.0).print_easy_reading())
-
             ;
 
             /*******************************************************************************************************/
@@ -198,35 +170,31 @@ fn main(){
                 
             let only_domain =
                 t_box
-                    .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#domain>")
+                    .filter(|triple| triple.predicate == reasoning_service::model::RDFS_DOMAIN)
                     ;
 
             let domain_type_rule = 
                     a_box
-                        .map(|triple| (triple.subject, triple.predicate, triple.object))
                         .iterate(|inner| {
                             let only_domain_in =
-                                 only_domain.enter(&inner.scope())
-                                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                 only_domain
+                                    .enter(&inner.scope())
                             ;
 
                             inner
-                                .map(|(a, p, b)| (p, (a, b)))
-                                .join(&only_domain_in.map(|(p, dom, d)| (p, (dom, d))))
-                                .map(|(_key, ((a, _b), (_dom, d)))| (a, String::from("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"), d))
+                                .map(|triple| (triple.predicate, (triple.subject, triple.object)))
+                                .join(&only_domain_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                                .map(|(_key, ((a, _b), (_dom, d)))| 
+                                    reasoning_service::model::Triple {
+                                        subject: a,
+                                        predicate: String::from(reasoning_service::model::RDF_TYPE),
+                                        object: d
+                                    }
+                                )
                                 .concat(&inner)
                                 .distinct()
                         })
-                        .map(|(x, y, j)| {
-                            reasoning_service::model::Triple {
-                                subject: x,
-                                predicate: y,
-                                object: j,
-                            }
-                        })
-                        // .inspect(|triple| (triple.0).print_easy_reading())
-
-            ;
+                        ;
 
             /*******************************************************************************************************/
 
@@ -236,35 +204,34 @@ fn main(){
                             
             let only_range =
                 t_box
-                    .filter(|triple| triple.predicate == "<http://www.w3.org/2000/01/rdf-schema#range>")
+                    .filter(|triple| triple.predicate == reasoning_service::model::RDFS_RANGE)
                     ;
 
             let range_type_rule = 
                     a_box
-                        .map(|triple| (triple.subject, triple.predicate, triple.object))
                         .iterate(|inner| {
                             let only_range_in =
-                                 only_range.enter(&inner.scope())
-                                            .map(|triple| (triple.subject, triple.predicate, triple.object))
+                                 only_range
+                                    .enter(&inner.scope())
                             ;
 
                             inner
-                                .map(|(a, p, b)| (p, (a, b)))
-                                .join(&only_range_in.map(|(p, ran, r)| (p, (ran, r))))
-                                .map(|(_key, ((_a, b), (_ran, r)))| (b, String::from("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"), r))
+                                // .map(|(a, p, b)| (p, (a, b)))
+                                .map(|triple| (triple.predicate, (triple.subject, triple.object)))
+                                // .join(&only_range_in.map(|(p, ran, r)| (p, (ran, r))))
+                                .join(&only_range_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                                // .map(|(_key, ((_a, b), (_ran, r)))| (b, String::from("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"), r))
+                                .map(|(_key, ((_a, b), (_ran, r)))| 
+                                    reasoning_service::model::Triple {
+                                        subject: b,
+                                        predicate: String::from(reasoning_service::model::RDF_TYPE),
+                                        object: r
+                                    }
+                                )
                                 .concat(&inner)
                                 .distinct()
-                        })
-                        .map(|(x, y, j)| {
-                            reasoning_service::model::Triple {
-                                subject: x,
-                                predicate: y,
-                                object: j,
-                            }
-                        })
-                        // .inspect(|triple| (triple.0).print_easy_reading())
-                                   
-            ;
+                        })         
+                    ;
              
             /*******************************************************************************************************/
 
