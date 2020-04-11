@@ -170,14 +170,14 @@ use differential_dataflow::operators::reduce::Threshold;
 
 /// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
 pub fn rule_1<G>(
-    t_box: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope, 
     G::Timestamp: Lattice,
 {
     let sco_transitive_closure =        
-        t_box
+        data_collection
             .filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
             .iterate(|inner| {
                 
@@ -194,6 +194,8 @@ where
                     .concat(&inner)
                     .distinct()
             })
+            //.inspect(|x| println!("AFTER_RULE_1: {:?}", x))
+
         ;
 
     sco_transitive_closure
@@ -203,14 +205,14 @@ where
 
 /// Second rule: T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
 pub fn rule_2<G>(
-    t_box: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
     let spo_transitive_closure = 
-        t_box
+        data_collection
             .filter(|triple| triple.predicate == model::RDFS_SUB_PROPERTY_OF)
             .iterate(|inner| {
                                 
@@ -227,7 +229,6 @@ where
                     .concat(&inner)
                     .distinct()
                 
-                
             })
             ;
 
@@ -236,27 +237,35 @@ where
 
 /// Third rule: T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
 pub fn rule_3<G>(
-    a_box: &Collection<G, model::Triple>,
-    sco_transitive_closure: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    let sco_type_rule = 
-        a_box
-            // .inspect(|x| println!("ABOX: {:?}", x))
+    let sco_only = 
+        data_collection.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
+        ;
+
+    let candidates =
+        data_collection
             .filter(|triple| triple.predicate == model::RDF_TYPE)
+            .map(|triple| (triple.object.clone(), (triple)))
+            .join(&sco_only.map(|triple| (triple.subject, ())))
+            .map(|(_key, (triple, ()))| triple)
+            ;
+
+    let sco_type_rule = 
+        candidates
             .iterate(|inner| {
-                let sco_transitive_closure_in =
-                     sco_transitive_closure
-                        // .inspect(|x| println!("sco_transitive_in: {:?}", x))
+                let sco_only_in = 
+                    sco_only
                         .enter(&inner.scope())
-                ;
+                        ;
 
                 inner
                     .map(|triple| (triple.object, (triple.subject, triple.predicate)))
-                    .join(&sco_transitive_closure_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                    .join(&sco_only_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
                     .map(|(_key, ((x, typ), (_sco, b)))| 
                         model::Triple {
                             subject: x,
@@ -274,24 +283,35 @@ where
 
 /// Fourth rule: T(x, p, b) <= T(p1, SPO, p),T(x, p1, y)
 pub fn rule_4<G>(
-    a_box: &Collection<G, model::Triple>,
-    spo_transitive_closure: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // Select only the triples whose predicate participates in a SPO triple
+    let spo_only_out =
+        data_collection
+            .filter(|triple| triple.predicate == model::RDFS_SUB_PROPERTY_OF)
+        ;
+    
+    let candidates = 
+        data_collection
+            .map(|triple| ((triple.predicate.clone()),triple))
+            .join(&spo_only_out.map(|triple| ((triple.subject),())))
+            .map(|(_, (triple, ()))| triple)
+            ; 
+    
     let spo_type_rule = 
-        a_box
+        candidates
             .iterate(|inner| {
-                let spo_transitive_closure_in =
-                     spo_transitive_closure
+                let spo_only = 
+                    spo_only_out
                         .enter(&inner.scope())
-                ;
-
+                        ;
                 inner
                     .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-                    .join(&spo_transitive_closure_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                    .join(&spo_only.map(|triple| (triple.subject, (triple.predicate, triple.object))))
                     .map(|(_key, ((x, y), (_spo, p)))| 
                         model::Triple {
                             subject: x,
@@ -308,81 +328,78 @@ where
 
 /// Fifth rule: T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
 pub fn rule_5<G>(
-    t_box: &Collection<G, model::Triple>,
-    a_box_property_closed: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
     let only_domain =
-        t_box
+        data_collection
             .filter(|triple| triple.predicate == model::RDFS_DOMAIN)
             ;
 
-    let domain_type_rule = 
-            a_box_property_closed
-                .iterate(|inner| {
-                    let only_domain_in =
-                         only_domain
-                            .enter(&inner.scope())
-                    ;
+    let candidates = 
+        data_collection
+            .map(|triple| ((triple.predicate.clone()),triple))
+            .join(&only_domain.map(|triple| (triple.subject, ())))
+            .map(|(_, (triple, ()))| triple)
+            ; 
 
-                    inner
-                        .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-                        .join(&only_domain_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-                        .map(|(_key, ((a, _b), (_dom, d)))| 
-                            model::Triple {
-                                subject: a,
-                                predicate: String::from(model::RDF_TYPE),
-                                object: d
-                            }
-                        )
-                        .concat(&inner)
-                        .distinct()
-                })
-                ;
+    // This does not require a iterative dataflow, the rule does not produce
+    // terms that are used by the rule itself
+    let domain_type_rule =
+        candidates
+            .map(|triple| (triple.predicate, (triple.subject, triple.object)))
+            .join(&only_domain.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+            .map(|(_key, ((a, _b), (_dom, d)))| 
+                model::Triple {
+                    subject: a,
+                    predicate: String::from(model::RDF_TYPE),
+                    object: d,
+                }
+            )
+            ;
 
     domain_type_rule
 }
 
 /// Sixth rule: T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
 pub fn rule_6<G>(
-    t_box: &Collection<G, model::Triple>,
-    a_box: &Collection<G, model::Triple>,
+    data_collection: &Collection<G, model::Triple>,
 ) -> Collection<G, model::Triple>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
     let only_range =
-        t_box
+        data_collection
             .filter(|triple| triple.predicate == model::RDFS_RANGE)
             ;
 
-    let range_type_rule = 
-            a_box
-                .iterate(|inner| {
-                    let only_range_in =
-                         only_range
-                            .enter(&inner.scope())
-                    ;
+    let candidates = 
+        data_collection
+            .map(|triple| ((triple.predicate.clone()),triple))
+            .join(&only_range.map(|triple| (triple.subject, ())))
+            .map(|(_, (triple, ()))| triple)
+            ; 
 
-                    inner
-                        .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-                        .join(&only_range_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-                        .map(|(_key, ((_a, b), (_ran, r)))| 
-                            model::Triple {
-                                subject: b,
-                                predicate: String::from(model::RDF_TYPE),
-                                object: r
-                            }
-                        )
-                        .concat(&inner)
-                        .distinct()
-                })         
+    // This does not require a iterative dataflow, the rule does not produce
+    // terms that are used by the rule itself
+    let domain_type_rule =
+        candidates
+            .map(|triple| (triple.predicate, (triple.subject, triple.object)))
+            .join(&only_range.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+            .map(|(_key, ((_a, b), (_ran, r)))| 
+                model::Triple {
+                    subject: b,
+                    predicate: String::from(model::RDF_TYPE),
+                    object: r,
+                }
+            )
             ;
-    range_type_rule
+
+    domain_type_rule
 }
 
 
@@ -394,8 +411,7 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
 
 /// Computes the full materialization of the collection 
 pub fn full_materialization<G>(
-    t_box: &Collection<G, model::Triple>,
-    a_box: &Collection<G, model::Triple>,
+    data_input: &Collection<G, model::Triple>,
     mut probe: &mut ProbeHandle<G::Timestamp>,
 ) -> TraceAgent<OrdKeySpine<model::Triple, G::Timestamp, isize>>
 where 
@@ -424,50 +440,50 @@ where
             // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)      -- rule_3
             // as we can see there is no rule with a literal in the body that
             // corresponds to a literal in the head of any subsequent rule
-            let sco_transitive_closure = rule_1(&t_box);
+            
+            
+            let sco_transitive_closure = rule_1(&data_input);
 
-            let spo_transitive_closure = rule_2(&t_box);
+            let spo_transitive_closure = rule_2(&data_input);
 
-            let spo_type_rule = rule_4(&a_box, &spo_transitive_closure);
+            let data_input = data_input
+                                .concat(&sco_transitive_closure)
+                                .concat(&spo_transitive_closure)
+                                .distinct()
+                                ;
+            
 
-            let domain_type_rule = rule_5(&t_box, &spo_type_rule);
+            let spo_type_rule = rule_4(&data_input);
+            
+            let data_input = data_input
+                                .concat(&spo_type_rule)
+                                .distinct()
+                                ;
 
-            let range_type_rule = rule_6(&t_box, &spo_type_rule);
+            let domain_type_rule = rule_5(&data_input);
 
-            // The last rule has to be applied to the result of the domain
-            // and range rules
-            let a_box_extended = 
-                a_box
-                    .concat(&domain_type_rule)
-                    .concat(&range_type_rule)
-                    .distinct()
-                    ;
+            // We don't need this, but still :P
+            let data_input = data_input
+                                .concat(&domain_type_rule)
+                                .distinct()
+                                ;
 
-            let sco_type_rule = rule_3(&a_box_extended, &sco_transitive_closure);
+            let range_type_rule = rule_6(&data_input);
+
+            let data_input = data_input
+                                .concat(&range_type_rule)
+                                .distinct()
+                                ;
+
+            let sco_type_rule = rule_3(&data_input);
+
+            let data_input = data_input
+                                .concat(&sco_type_rule)
+                                .distinct()
+                                ;
                 
             let arrangement = 
-                sco_transitive_closure
-                    .concat(&spo_transitive_closure)
-                    .concat(&sco_type_rule)
-                    .concat(&spo_type_rule)
-                    .concat(&domain_type_rule)
-                    .concat(&range_type_rule)
-                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!VERY INEFFICIENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    // TODO: FIX THIS NONSENSE, IT'S NEEDED BECAUSE WHEN I INSERT A NEW TRIPLE IT DOES NOT END IN THE
-                    // MATERIALIZATION FILE
-                    // Actually.. I don't know if it's as bad as I thought..
-                    // .concat(&t_box)
-                    // .concat(&a_box)
-                    // TODO: Impement all the traits necessary to apply distinct directly on collections of triples
-                    .map(|triple| (triple.subject, triple.predicate, triple.object))
-                    .distinct()
-                    .map(|(x, y, j)| {
-                        model::Triple {
-                            subject: x,
-                            predicate: y,
-                            object: j,
-                        }
-                    })
+                data_input
                     .inspect(|triple| (triple.0).print_easy_reading())
                     // .inspect(|triple| println!("{:?}", triple))
                     // .inspect(|x| println!("{:?}", x))
@@ -483,61 +499,69 @@ where
 }
 
 use differential_dataflow::input::InputSession;
-use std::time::Instant;
 /// Sets up the data for to use for the full materialization
+/// Here some preprocessing is required, we hav to eliminate all the owl tags and change the "terminological type" to distinguish it from the axiomatic one
 pub fn load_lubm_data(
     a_box_filename: &str,
     t_box_filename: &str,
     index: usize,
     peers: usize
-) -> (HashSet<crate::model::Triple>, Vec<model::Triple>) {
+) -> (Vec<model::Triple>, Vec<model::Triple>) {
     // let a_box = reasoning_service::load_data(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\LUB1_nt_consolidated\\Universities.nt"), index, peers);
     let a_box = load_data(a_box_filename, index, peers);
     // let t_box = reasoning_service::load_ontology("C:\\Users\\xhimi\\Documents\\University\\THESIS\\univ-bench-prefix-changed.owl");
     let t_box = load_ontology(t_box_filename);
+    // Preprocess the terminological box
+    let t_box = preprocess(t_box);
     (t_box, a_box)
 }
+
+fn preprocess(t_box: HashSet<model::Triple>) -> Vec<model::Triple> {
+    let mut res: Vec<model::Triple> = Vec::new();
+    // TODO: Preprocess the data restricting only triples in rdfs (RhoDF)
+    for triple in t_box {
+        res.push(triple)
+    }
+    res
+} 
 
 
 /// insert data provided by the abox and tbox into the dataflow through
 /// the input handles. Here all the 
 pub fn insert_starting_data(
     a_box: Vec<model::Triple>,
-    a_box_input: &mut InputSession<usize, model::Triple, isize>,
-    t_box: HashSet<model::Triple>,
-    t_box_input: &mut InputSession<usize, model::Triple, isize>,
+    data_input: &mut InputSession<usize, model::Triple, isize>,
+    t_box: Vec<model::Triple>,
 ) {
 
+    
+    for triple in t_box {
+        data_input.insert(triple);
+    }
     for triple in a_box {
-        a_box_input.insert(triple);
+        data_input.insert(triple);
     }
 
-    for triple in t_box {
-        t_box_input.insert(triple);
-    }
     // initial data are inserted all with timestamp 0, so we advance at time 1 and schedule the worker
-    a_box_input.advance_to(1); a_box_input.flush();
-    t_box_input.advance_to(1); t_box_input.flush();
+    data_input.advance_to(1); data_input.flush();
 }
 
 /// Incremental addition maintenance
 pub fn add_data(
     a_box_batch: Vec<model::Triple>,
-    a_box_input: &mut InputSession<usize, model::Triple, isize>,
+    data_input: &mut InputSession<usize, model::Triple, isize>,
     t_box_batch: Vec<model::Triple>,
-    t_box_input: &mut InputSession<usize, model::Triple, isize>,
     time_to_advance_to: usize
 ) {
     for triple in a_box_batch {
-        a_box_input.insert(triple);
+        data_input.insert(triple);
     }
 
     for triple in t_box_batch {
-        t_box_input.insert(triple);
+        data_input.insert(triple);
     }
 
-    a_box_input.advance_to(time_to_advance_to); a_box_input.flush();
-    t_box_input.advance_to(time_to_advance_to); t_box_input.flush();
+    data_input.advance_to(time_to_advance_to); data_input.flush();
 }
 
 // ASSUMPTION: closed world: if `something sco something_else` is missing it means that it is not true that `something sco something_else`
@@ -545,22 +569,20 @@ pub fn add_data(
 /// Here we are going to implement the DRED
 pub fn remove_data(
     a_box_batch: Vec<model::Triple>,
-    a_box_input: &mut InputSession<usize, model::Triple, isize>,
+    data_input: &mut InputSession<usize, model::Triple, isize>,
     t_box_batch: Vec<model::Triple>,
-    t_box_input: &mut InputSession<usize, model::Triple, isize>,
     time_to_advance_to: usize
 ) {
 
     for triple in a_box_batch {
-        a_box_input.remove(triple);
+        data_input.remove(triple);
     }
 
     for triple in t_box_batch {
-        t_box_input.remove(triple);
+        data_input.remove(triple);
     }
 
-    a_box_input.advance_to(time_to_advance_to); a_box_input.flush();
-    t_box_input.advance_to(time_to_advance_to); t_box_input.flush();
+    data_input.advance_to(time_to_advance_to); data_input.flush();
 }
 
 /// Save the full materialization fo file

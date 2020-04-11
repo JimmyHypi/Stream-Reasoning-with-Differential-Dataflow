@@ -24,6 +24,8 @@ pub static RDFS_DOMAIN: &str = "<http://www.w3.org/2000/01/rdf-schema#domain>";
 pub static RDFS_RANGE: &str = "<http://www.w3.org/2000/01/rdf-schema#range>";
 /// URI of rdf:type
 pub static RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+/// MAYBE NOT NEEDED
+pub static RDF_TYPE_TERMINOLOGICAL: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#term_type>";
 
 impl Triple {
     /// Prints only the local name with no namespace, just for easy reading
@@ -37,6 +39,9 @@ impl Triple {
         }
         if let Some(n) = self.predicate.as_str().find('#') {
             print!("{} ", &(self.predicate.as_str())[n..self.predicate.as_str().len()-1]);
+        } else {
+            // a label like "is member of"
+            print!("{}", self.predicate);
         }
         if let Some(n) = self.object.as_str().find('#') {
             println!("{} ", &(self.object.as_str())[n..self.object.as_str().len()-1]);
