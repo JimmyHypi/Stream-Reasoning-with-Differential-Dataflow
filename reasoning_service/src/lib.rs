@@ -12,6 +12,8 @@ use std::fs::File;
 ///     - No repeated value in the A_Box
 ///     - Data uses only ASCII characters
 /// function to load the data, parallelized with respect to the number of workers.
+/// At this point of the work multiple workers are not considered because the logic to shuffle the data
+/// is not trivial at all
 pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Triple> {
     use std::io::BufRead;
 
@@ -121,8 +123,6 @@ pub fn load_rules(filename: &str) -> Vec::<model::CustomRule> {
     returning_data
 }
 
-
-// Private Functions
 fn build_literal(params: Vec::<&str>) -> model::CustomLiteral {
     
     let first_param: model::PossibleTerm = model::PossibleTerm::LiteralVariable(String::from(&(params[0])[1..]));
@@ -192,7 +192,8 @@ where
                         }
                     )
                     .concat(&inner)
-                    .distinct()
+                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
+                    
             })
             //.inspect(|x| println!("AFTER_RULE_1: {:?}", x))
 
@@ -227,7 +228,7 @@ where
                         }
                     )
                     .concat(&inner)
-                    .distinct()
+                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
                 
             })
             ;
@@ -274,7 +275,7 @@ where
                         }
                     )
                     .concat(&inner)
-                    .distinct()
+                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
             })
             ;
 
@@ -320,7 +321,7 @@ where
                         }
                     )
                     .concat(&inner)
-                    .distinct()
+                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
             })
             ;
     spo_type_rule
@@ -449,7 +450,12 @@ where
             let data_input = data_input
                                 .concat(&sco_transitive_closure)
                                 .concat(&spo_transitive_closure)
-                                .distinct()
+                                //  VERY IMPORTANT: THE DISTINCT PUTS THE REMOVAL INTO ADDITION
+                                // SO WE REWRITE THE DISTINCT TO KEEP THE REMOVAL -1
+                                // .distinct()
+                                .threshold(|_,c| {
+                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
+                                 })
                                 ;
             
 
@@ -457,7 +463,10 @@ where
             
             let data_input = data_input
                                 .concat(&spo_type_rule)
-                                .distinct()
+                                // .distinct()
+                                .threshold(|_,c| {
+                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
+                                 })
                                 ;
 
             let domain_type_rule = rule_5(&data_input);
@@ -465,26 +474,35 @@ where
             // We don't need this, but still :P
             let data_input = data_input
                                 .concat(&domain_type_rule)
-                                .distinct()
+                                // .distinct()
+                                .threshold(|_,c| {
+                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
+                                 })
                                 ;
 
             let range_type_rule = rule_6(&data_input);
 
             let data_input = data_input
                                 .concat(&range_type_rule)
-                                .distinct()
+                                // .distinct()
+                                .threshold(|_,c| {
+                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
+                                 })
                                 ;
 
             let sco_type_rule = rule_3(&data_input);
 
             let data_input = data_input
                                 .concat(&sco_type_rule)
-                                .distinct()
+                                // .distinct()
+                                .threshold(|_,c| {
+                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
+                                 })
                                 ;
                 
             let arrangement = 
                 data_input
-                    .inspect(|triple| (triple.0).print_easy_reading())
+                    // .inspect(|triple| (triple.0).print_easy_reading())
                     // .inspect(|triple| println!("{:?}", triple))
                     // .inspect(|x| println!("{:?}", x))
                     .arrange_by_self()
@@ -553,11 +571,11 @@ pub fn add_data(
     t_box_batch: Vec<model::Triple>,
     time_to_advance_to: usize
 ) {
-    for triple in a_box_batch {
+    for triple in t_box_batch {
         data_input.insert(triple);
     }
 
-    for triple in t_box_batch {
+    for triple in a_box_batch {
         data_input.insert(triple);
     }
 
@@ -566,7 +584,6 @@ pub fn add_data(
 
 // ASSUMPTION: closed world: if `something sco something_else` is missing it means that it is not true that `something sco something_else`
 /// Incremental deletion maintenance:
-/// Here we are going to implement the DRED
 pub fn remove_data(
     a_box_batch: Vec<model::Triple>,
     data_input: &mut InputSession<usize, model::Triple, isize>,
@@ -574,13 +591,14 @@ pub fn remove_data(
     time_to_advance_to: usize
 ) {
 
+    for triple in t_box_batch {
+        data_input.remove(triple);
+    }
+
     for triple in a_box_batch {
         data_input.remove(triple);
     }
 
-    for triple in t_box_batch {
-        data_input.remove(triple);
-    }
 
     data_input.advance_to(time_to_advance_to); data_input.flush();
 }
@@ -597,33 +615,28 @@ pub fn save_to_file_through_trace(
     use differential_dataflow::trace::TraceReader;
     use differential_dataflow::trace::cursor::Cursor;
 
-    let mut full_materialization_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .append(true)
-        .create(true)
-        .open(path)
-        // .open("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\full_materialization_easy.nt")
-        .expect("Something wrong happened with the ouput file");
+    // let mut full_materialization_file = OpenOptions::new()
+    //     .read(true)
+    //     .write(true)
+    //     .append(true)
+    //     .create(true)
+    //     .open(path)
+    //     .expect("Something wrong happened with the ouput file");
 
-    // TODO: 
-    // I want to transfer to file, but concurrently kinda stinks.. Cause the file gets all messed up.. let's first
-    // transfer it in memory to something in the main thread and then figure out how to make it concurrency
-    // FOR NOW I AM RUNNING THE PROGRAM WITH ONLY ONE THREAD. CUZ I WANT TO SEE IF THE MATERIALIZATION WORKS
     if let Some((mut cursor, storage)) = trace.cursor_through(&[time]){
         while let Some(key) = cursor.get_key(&storage) {
             while let Some(&()) = cursor.get_val(&storage) {
                 let mut count = 0;
                 use timely::order::PartialOrder;
                 cursor.map_times(&storage, |t, diff| {
-                    // println!("({}, {})", t, diff);
+                    // println!("{}, DIFF:{:?} ", key, diff);
                     if t.less_equal(&(time-1)) {
                         count += diff;
                     }
                 });
                 if count > 0 {
                     // println!("{}", key);
-                    // key.print_easy_reading();
+                    key.print_easy_reading();
                     // if let Err(e) = writeln!(full_materialization_file, "{}", key.to_string()) {
                     //     eprintln!("Couldn't write to file: {}", e);
                     // }
@@ -636,6 +649,71 @@ pub fn save_to_file_through_trace(
         println!("COULDN'T GET CURSOR");
     }
 
+}
+
+
+/// Saves the fragment of the materialization related to a worker in a vector so that it can be joined to create
+/// the full file. TODO: IS THIS A LITTLE EXPENSIVE
+pub fn return_vector(
+    trace: &mut TraceAgent<OrdKeySpine<model::Triple, usize, isize>>,
+    time: usize
+) -> Vec<String>
+{  
+    use differential_dataflow::trace::TraceReader;
+    use differential_dataflow::trace::cursor::Cursor;
+
+    let mut res = Vec::new();
+
+    if let Some((mut cursor, storage)) = trace.cursor_through(&[time]){
+        while let Some(key) = cursor.get_key(&storage) {
+            while let Some(&()) = cursor.get_val(&storage) {
+                let mut count = 0;
+                use timely::order::PartialOrder;
+                cursor.map_times(&storage, |t, diff| {
+                    // println!("{}, DIFF:{:?} ", key, diff);
+                    if t.less_equal(&(time-1)) {
+                        count += diff;
+                    }
+                });
+                if count > 0 {
+                    // println!("{}", key);
+                    // key.print_easy_reading();
+                    res.push(key.to_string());
+                } 
+                cursor.step_val(&storage);
+            }
+            cursor.step_key(&storage);
+        }
+    } else {
+        println!("COULDN'T GET CURSOR");
+    }
+
+    res
+}
+
+/// Concatenates the different fragments into the final file
+pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mut del_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(path)
+        .expect("Something wrong happened with the ouput file");
+
+    for i in 0..result.len() {
+        if let Some(Ok(vec)) = result.get(i) {
+            for elem in vec {
+                // println!("{}", elem);
+                if let Err(e) = writeln!(del_file, "{}", elem) {
+                    eprintln!("Couldn't write to file: {}", e);
+                }
+            }
+        }    
+    }
 }
 
 #[cfg(test)]

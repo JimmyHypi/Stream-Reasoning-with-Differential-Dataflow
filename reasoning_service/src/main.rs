@@ -30,8 +30,17 @@ fn main(){
                 
         });
 
+
+        // Insertion of data in the dataflow
+
+
+
+
+        // let (t_box, a_box) = reasoning_service::load_lubm_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\LUB1_nt_consolidated\\Universities.nt", "C:\\Users\\xhimi\\Documents\\University\\THESIS\\univ-bench-prefix-changed.owl", index, peers);
+        // simpler dataset to see what is going on
+        // TODO: EVERY WORKER LOADS ALL THE ONTOLOGY. FIX
         let (t_box, a_box) = reasoning_service::load_lubm_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\test_for_simple_reasoning.nt", "C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\univ-bench-oversimple-no-owl.owl", index, peers);
-        
+                
         if index == 0 {
             println!("Load time: {}ms", timer.elapsed().as_millis());
             println!("Abox triples number: {}", a_box.len());
@@ -50,22 +59,31 @@ fn main(){
             timer = std::time::Instant::now();
         }
 
-        reasoning_service::save_to_file_through_trace("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\incremental_materialization_easy_refactored.nt", &mut result_trace, 1);
+        // reasoning_service::save_to_file_through_trace(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\Parallel_Materialization\\full_materialization\\LUB1_full_materialization_worker{}.nt", index), &mut result_trace, 1);
+        reasoning_service::save_to_file_through_trace(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\Parallel_Materialization\\full_materialization\\running_example_worker{}.nt", index), &mut result_trace, 1);
         
         if index == 0 {
             println!("Saving to file time: {}ms", timer.elapsed().as_millis());
             timer = std::time::Instant::now();
         }
 
-        /*
-
+        
         // Test purpose only -- Addition
 
-        let t_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\t_box_addition_test.nt", index, peers);
-        let a_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\a_box_addition_test.nt", index, peers);
 
-        reasoning_service::add_data(a_box_batch, &mut data_input, t_box_batch, 2);
+        // WARNING: Shouldn't this be the same as for removals? where everyworker should add the same data?
+        let t_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\t_box_addition_test_another.nt", index, peers);
+        // let a_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\a_box_addition_test.nt", index, peers);
+        reasoning_service::add_data(vec![], &mut data_input, t_box_batch, 2);
+
         
+        // Simpler version to see what is going on
+        // let t_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\t_box_addition_test.nt", index, peers);
+        // let a_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\a_box_addition_test.nt", index, peers);
+
+        // reasoning_service::add_data(a_box_batch, &mut data_input, t_box_batch, 2);
+
+
         while probe.less_than(data_input.time()) {
             worker.step();
         }
@@ -76,20 +94,22 @@ fn main(){
         }
 
 
-        reasoning_service::save_to_file_through_trace("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\incremental_materialization_easy_refactored.nt", &mut result_trace, 2);
+        // reasoning_service::save_to_file_through_trace(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\Parallel_Materialization\\materialization_after_additions\\LUB1_incremental_materialization_addition{}.nt", index), &mut result_trace, 2);
+        reasoning_service::save_to_file_through_trace(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\Parallel_Materialization\\materialization_after_additions\\running_example_additions_worker{}.nt", index), &mut result_trace, 2);
 
         if index == 0 {
             println!("Saving to file first update time: {}ms", timer.elapsed().as_millis());
             timer = std::time::Instant::now();
         }
 
-        */
+        
+
+        // NOTHING TO BE REMOVED FOR NOW
 
         // Test purpose only -- Deletion
-        // THE REMOVAL IS NOT THAT EASY, CUZ I HAVE TO REMOVE EVEN ALL THE OTHER TRIPLES THAT USED A TRIPLE THAT IS BEING REMOVED AT THAT TIME, OH GOD..
 
-        let t_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\t_box_deletion_test.nt", index, peers);
-        // let a_box_changes = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\a_box_addition_test.nt", index, peers);
+        // Every worker has to remove the tuple from its local partition of the dataset. So we load the removing data 
+        let t_box_batch = reasoning_service::load_data("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Data_for_reasoning\\test_for_simple_reasoning\\t_box_deletion_test_another.nt", 0, 1);
         
         reasoning_service::remove_data(vec![], &mut data_input, t_box_batch, 2);
         
@@ -102,15 +122,12 @@ fn main(){
             timer = std::time::Instant::now();
         }
 
-
-        reasoning_service::save_to_file_through_trace("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\incremental_materialization_easy_refactored.nt", &mut result_trace, 2);
+        reasoning_service::save_to_file_through_trace(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\Parallel_Materialization\\materialization_after_deletions\\deletion_running_example_worker{}.nt", index), &mut result_trace, 2);
 
         if index == 0 {
             println!("Saving to file second update time: {}ms", timer.elapsed().as_millis());
             timer = std::time::Instant::now();
         }
-
-
 
     }).expect("Couldn't run timely dataflow correctly");
 
