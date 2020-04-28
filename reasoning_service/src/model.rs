@@ -145,8 +145,53 @@ impl std::fmt::Display for RhoDFWord {
 }
 
 
+#[derive(Debug)]
+/// Contains full materialization statistics
+pub struct Statistics {
+    /// load time
+    pub load_time: u128,
+    /// full materialization time, just to record multiple runs to average out the full mat time
+    pub mat_time: u128,
+    /// full materialization time to save from trace to vec, to be joined in the main thread
+    pub mat_to_vec_time: u128,
+    /// full materialization
+    pub mat: Option<Vec<String>>,
+}
+
+impl Statistics {
+    /// initialize an empty statistics struct
+    pub fn new() -> Self {
+        Statistics {
+            load_time: 0,
+            mat_time: 0,
+            mat_to_vec_time: 0,
+            mat: None,
+        }
+    }
+}
 
 
+#[derive(Debug)]
+/// Contains inc materialization statistics
+pub struct IncrMatStatistics {
+    /// time to upload the triples in the update
+    pub update_load_time: u128,
+    /// update materialization time
+    pub update_mat_time: u128,
+    /// update time from trace to vec, to be joined in the main thread
+    pub update_mat_to_vec_time: u128,
+    /// the incremental materialization
+    pub update_mat: Option<Vec<String>>,
+}
 
-
-
+impl IncrMatStatistics {
+    /// initialize an empty statistics struct
+    pub fn new() -> Self {
+        IncrMatStatistics {
+            update_load_time: 0,
+            update_mat_time: 0,
+            update_mat_to_vec_time: 0,
+            update_mat: None,
+        }
+    }
+}

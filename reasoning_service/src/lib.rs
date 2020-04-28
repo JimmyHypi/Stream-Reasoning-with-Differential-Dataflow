@@ -618,7 +618,7 @@ pub fn save_to_file_through_trace(
     // let mut full_materialization_file = OpenOptions::new()
     //     .read(true)
     //     .write(true)
-    //     .append(true)
+    //     .truncate(true)
     //     .create(true)
     //     .open(path)
     //     .expect("Something wrong happened with the ouput file");
@@ -699,10 +699,12 @@ pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
     let mut del_file = OpenOptions::new()
         .read(true)
         .write(true)
-        .append(true)
+        .truncate(true)
         .create(true)
         .open(path)
         .expect("Something wrong happened with the ouput file");
+    // In case we already have it let's erase it and resave it instead of reconcatenating the whole thing
+    // del_file.set_len(0).expect("Unable to reset file");
 
     for i in 0..result.len() {
         if let Some(Ok(vec)) = result.get(i) {
@@ -715,6 +717,77 @@ pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
         }    
     }
 }
+
+/// outputs to file the results of the timely computation
+pub fn save_stat_to_file(mat_path: &str, stat_path: &str, stats: Vec<model::Statistics>) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mut load_times: Vec<u128> = vec![];
+    let mut mat_times: Vec<u128> = vec![];
+    let mut mat_to_vec_times: Vec<u128> = vec![];
+
+    let mut mat_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(mat_path)
+        .expect("Something wrong happened with the ouput file");
+    
+    let save_time = std::time::Instant::now();
+    for stat in &stats {
+        if let Some(vec) = &stat.mat {
+            for string in vec {
+                // println!("{}", string);
+                if let Err(e) = writeln!(mat_file, "{}", string) {
+                    eprintln!("Couldn't write to file: {}", e);
+                }
+            }
+        }
+    }
+
+    let time_to_save_mat = save_time.elapsed().as_nanos();
+
+    for stat in stats {
+        load_times.push(stat.load_time);
+        mat_times.push(stat.mat_time);
+        mat_to_vec_times.push(stat.mat_to_vec_time);
+    }
+
+    let load_time = load_times.iter().max().expect("No max found");
+    let mat_time = mat_times.iter().max().expect("No max found");
+    let mat_to_vec_time = mat_to_vec_times.iter().max().expect("No max found");
+    // I don't believe this is ever going to overflow u128..
+    let total_time_to_save = time_to_save_mat + mat_to_vec_time;
+    
+
+    let mut stat_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(stat_path)
+        .expect("Something wrong happened with the ouput file");
+
+    // Here we initialize the empty file with a directory saying what the columns are
+    let metadata = std::fs::metadata(stat_path).expect("Could not get metadata");
+    if metadata.len() == 0 {
+        if let Err(e) = writeln!(stat_file, "Load Time,Materialization Time,Time to save to file") {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+    }
+
+    println!("Load Time: {}", load_time);
+    println!("Materialization Time: {}", mat_time);
+    println!("Time to save to file: {}", total_time_to_save);
+
+    let string = format!("{},{},{}", load_time, mat_time, total_time_to_save);
+    if let Err(e) = writeln!(stat_file, "{}", string) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
