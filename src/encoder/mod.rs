@@ -1,6 +1,5 @@
 lalrpop_mod!(pub ntriples);
 use bimap::BiMap;
-use log::{debug, error, info, log_enabled, Level};
 use ntriples::NTriplesStringParser;
 use std::rc::Rc;
 
@@ -11,6 +10,7 @@ use std::rc::Rc;
 //    be generic. Allowing other posisble representation of a triple (e.g. &[T, 3]) or a
 //    user defined struct
 type ParsedTriple<T> = (T, T, T);
+type EncodedTriple<T> = (T, T, T);
 
 // [REQUIRED]:
 // This is required because lalrpop does not provide any trait for a parser.. To the best of
@@ -39,14 +39,22 @@ impl ParserTrait<Rc<String>> for NTriplesParser {
 
 // [DESIGN CHOICE]:
 // The trait generalizes the data structure returned by the load function and NOT
-// the encoding method. The encoding method is passed as a closure to the load function.
-// This decouples the two things which are logically different.
+// the encoding method. The encoding method is passed as another type to the load function.
+// This decouples the two things which are logically different. This allows reusability in
+// case one wants to use the same encoding logic for different data structures
 pub trait Encoder<K, V>
 where
     V: std::cmp::Eq + std::hash::Hash,
 {
-    type Output;
-    fn load<F, P>(file_name: &str, encoding_logic: F, parser: P) -> Self::Output
+    // Maps each string of type K to another type V
+    type MapStructure;
+    // Set of triples in the encoding domain
+    type EncodedDataSet;
+    fn load<F, P>(
+        file_name: &str,
+        encoding_logic: F,
+        parser: P,
+    ) -> (Self::MapStructure, Self::EncodedDataSet)
     where
         F: EncodingLogic<K, V>,
         P: ParserTrait<K>;
@@ -76,11 +84,19 @@ pub struct SimpleLogic {
     // [IMPROVEMENT]:
     // Probably overkill. A u64 should be enough based on the u64::MAX.
     // Does using a u128 instead of a u64 affect performances?
-    current_index: u128,
+    current_index: u64,
 }
 
-impl EncodingLogic<Rc<String>, u128> for SimpleLogic {
-    fn encode(&mut self, _string: Rc<String>) -> u128 {
+impl SimpleLogic {
+    pub fn new(base_index: u64) -> Self {
+        Self {
+            current_index: base_index,
+        }
+    }
+}
+
+impl EncodingLogic<Rc<String>, u64> for SimpleLogic {
+    fn encode(&mut self, _string: Rc<String>) -> u64 {
         let res = self.current_index;
         self.current_index += 1;
         res
@@ -90,40 +106,60 @@ impl EncodingLogic<Rc<String>, u128> for SimpleLogic {
 // This specializes encoding data structure
 pub struct BiMapEncoder {}
 
-impl Encoder<Rc<String>, u128> for BiMapEncoder {
-    // [IMPROVEMENT]:
-    // Should this be a weak or a strong reference count.
-    type Output = BiMap<Rc<String>, u128>;
-    fn load<F, P>(file_name: &str, mut encoding_fn: F, parser: P) -> Self::Output
+impl Encoder<Rc<String>, u64> for BiMapEncoder {
+    type MapStructure = BiMap<Rc<String>, u64>;
+    type EncodedDataSet = Vec<EncodedTriple<u64>>;
+    fn load<F, P>(
+        file_name: &str,
+        mut encoding_fn: F,
+        parser: P,
+    ) -> (Self::MapStructure, Self::EncodedDataSet)
     where
-        F: EncodingLogic<Rc<String>, u128>,
+        F: EncodingLogic<Rc<String>, u64>,
         P: ParserTrait<Rc<String>>,
     {
         let mut bimap = BiMap::new();
+        let mut vec = vec![];
         // [IMPROVEMENT]:
         // It seems a little ridiculous how the load function has the parser and it calls another
-        // function while it could do everything by itself..
+        // function while it could do everything by itself.. but hey, goal separation
         let triples = Self::parse(file_name, parser);
+
         for triple in triples {
             // [IMPROVEMENT]:
             // Consider using String interning to retrieve Strings. In this way comparison
             // would be constant with respect to the String length as the references would
             // be compared.
             let (s, p, o) = triple;
-            // In case of duplicates do not update index.
-            bimap
-                .insert_no_overwrite(s.clone(), encoding_fn.encode(s.clone()))
-                .expect("ERROR ACCESSING BIMAP");
-            bimap
-                .insert_no_overwrite(p.clone(), encoding_fn.encode(p.clone()))
-                .expect("ERROR ACCESSING BIMAP");
-            bimap
-                .insert_no_overwrite(o.clone(), encoding_fn.encode(o.clone()))
-                .expect("ERROR ACCESSING BIMAP");
+            let s_encoded = encoding_fn.encode(s.clone());
+            let p_encoded = encoding_fn.encode(p.clone());
+            let o_encoded = encoding_fn.encode(o.clone());
 
-            assert_eq!(Rc::strong_count(&s), 3);
+            let mut triple = (0, 0, 0);
+
+            // In case of duplicates do not update index.
+            if let Ok(()) = bimap.insert_no_overwrite(s.clone(), s_encoded) {
+                triple.0 = s_encoded;
+            } else {
+                // In this case is safe to use unwrap() because if we are in the else
+                // branch that means that a value was present.
+                triple.0 = *bimap.get_by_left(&s).unwrap();
+            }
+            if let Ok(()) = bimap.insert_no_overwrite(p.clone(), p_encoded) {
+                triple.1 = p_encoded;
+            } else {
+                triple.1 = *bimap.get_by_left(&p).unwrap();
+            }
+
+            if let Ok(()) = bimap.insert_no_overwrite(o.clone(), o_encoded) {
+                triple.2 = o_encoded;
+            } else {
+                triple.2 = *bimap.get_by_left(&o).unwrap();
+            }
+
+            vec.push(triple);
         }
-        bimap
+        (bimap, vec)
     }
 }
 
@@ -168,5 +204,27 @@ mod tests {
         let parsed = parsed.unwrap();
 
         assert_eq!(364, parsed.len());
+    }
+    use log::info;
+    #[test]
+    fn encoder_test() {
+        log_init();
+        let parser = NTriplesParser::new(NTriplesStringParser::new());
+        let logic = SimpleLogic::new(0);
+        let bimap = BiMapEncoder::load("data/univ-bench-preprocessed.nt", logic, parser);
+        let (dictionary, encoded_dataset) = bimap;
+        for pair in dictionary.iter() {
+            if pair.1 == &1080 || pair.1 == &7 || pair.1 == &1091 {
+                info!("{} <-> {}", pair.0, pair.1);
+            }
+        }
+        for triple in &encoded_dataset {
+            if triple == &(1080, 7, 1091) {
+                info!("{:?}", triple);
+            }
+        }
+        // assert_eq!(3, encoded_dataset.len());
+        // assert_eq!(7, dictionary.len());
+        assert!(true);
     }
 }
