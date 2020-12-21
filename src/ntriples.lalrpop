@@ -1,0 +1,43 @@
+use log::{debug, error, info, log_enabled, Level};
+use std::rc::Rc;
+grammar;
+
+pub NTriplesString = DsvDataset<StringTerm>;
+
+DsvDataset<T> = Dot<Triple<T>>;
+
+Dot<T>: Vec<T> = {
+	<mut v: (<T> " .")*> <e: T?> => match e {
+		None => v,
+		Some(e) => {
+			v.push(e);
+			v
+		}
+	}
+};
+
+Triple<T>: (T, T, T) =
+<s: T> <p: T> <o: T> => (s, p, o);
+
+StringTerm: Rc<String> = {
+		    r#"""# <s: r##"[a-z:?/0-9A-Z\-#\x20.,]+"##> r#"""#  <d: r"\^\^([a-z_:?/.0-9A-Z\-#<>])+"?> <l: r"@([a-zA-Z\-])+"?> => {
+			    let d = match d {
+				    Some(s) => s,
+				    None => "",
+			    };
+			    let l = match l {
+				    Some(s) => s,
+					    None => "",
+			    };
+			    let string = format!("\"{}\"{}{}", s, d, l);
+			    debug!("{}", string);
+			    Rc::from(string)
+		    },
+		    <t: r##"<([a-z_:?/.0-9A-Z\-#])+>"##> => {
+			    let string = String::from(&t[1..t.len()-1]); debug!("{}", string); Rc::from(string)
+		    },
+		    <t: r##"_([a-z_:?/0-9A-Z\-#])+"##> => {
+			    let string = String::from(t); debug!("{}", string); Rc::from(string)
+		    },
+	    };
+
