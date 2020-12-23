@@ -10,7 +10,7 @@ use std::rc::Rc;
 //    be generic. Allowing other posisble representation of a triple (e.g. &[T, 3]) or a
 //    user defined struct
 type ParsedTriple<T> = (T, T, T);
-type EncodedTriple<T> = (T, T, T);
+pub type EncodedTriple<T> = (T, T, T);
 
 // [REQUIRED]:
 // This is required because lalrpop does not provide any trait for a parser.. To the best of
@@ -37,6 +37,15 @@ impl ParserTrait<Rc<String>> for NTriplesParser {
     }
 }
 
+pub trait BiMapTrait<K, V>
+where
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    fn get_right(&self, left: &K) -> Option<&V>;
+    fn get_left(&self, right: &V) -> Option<&K>;
+}
+
 // [DESIGN CHOICE]:
 // The trait generalizes the data structure returned by the load function and NOT
 // the encoding method. The encoding method is passed as another type to the load function.
@@ -45,23 +54,27 @@ impl ParserTrait<Rc<String>> for NTriplesParser {
 pub trait Encoder<K, V>
 where
     V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
 {
     // Maps each string of type K to another type V
-    type MapStructure;
+    type MapStructure: BiMapTrait<K, V>;
     // Set of triples in the encoding domain
     type EncodedDataSet;
     fn load<F, P>(
         file_name: &str,
-        encoding_logic: F,
-        parser: P,
+        encoding_logic: &mut F,
+        parser: &mut P,
+        index: Option<usize>,
+        peers: Option<usize>,
     ) -> (Self::MapStructure, Self::EncodedDataSet)
     where
         F: EncodingLogic<K, V>,
         P: ParserTrait<K>;
+
     // [IMPROVEMENT]:
     // The return type seems like it should always be a (String, String, String)
     // because that's what the parser generator returns.
-    fn parse<P: ParserTrait<K>>(file_name: &str, mut parser: P) -> Vec<ParsedTriple<K>> {
+    fn parse<P: ParserTrait<K>>(file_name: &str, parser: &mut P) -> Vec<ParsedTriple<K>> {
         // [IMPROVEMENT]:
         // 1) Storing all the data in one big string seems a little meh.
         //    What if the data is REALLY big? We need some sort of caching or reading chunks
@@ -72,6 +85,12 @@ where
         let all_the_data = std::fs::read_to_string(file_name).expect("FAILED TO READ THE FILE");
         parser.parse(&all_the_data[..])
     }
+
+    // [IMPROVEMENT]:
+    // While the parser should be using tokio for concurrent parsing of the file, the load funtion
+    // does not. Make a parallel load funtion. In our case the parallelism is given by the dataflow
+    // using index and peers. For this reasong probably this load_parallel should not be a generic
+    // function. But a overwrite
 }
 
 // This implements encoding logic, this is a trait because encoding logic might work with some
@@ -106,13 +125,35 @@ impl EncodingLogic<Rc<String>, u64> for SimpleLogic {
 // This specializes encoding data structure
 pub struct BiMapEncoder {}
 
+pub struct BijectiveMap<K, V>
+where
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    bimap: BiMap<K, V>,
+}
+impl<K, V> BiMapTrait<K, V> for BijectiveMap<K, V>
+where
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    fn get_left(&self, right: &V) -> Option<&K> {
+        self.bimap.get_by_right(&right)
+    }
+    fn get_right(&self, left: &K) -> Option<&V> {
+        self.bimap.get_by_left(&left)
+    }
+}
+
 impl Encoder<Rc<String>, u64> for BiMapEncoder {
-    type MapStructure = BiMap<Rc<String>, u64>;
+    type MapStructure = BijectiveMap<Rc<String>, u64>;
     type EncodedDataSet = Vec<EncodedTriple<u64>>;
     fn load<F, P>(
         file_name: &str,
-        mut encoding_fn: F,
-        parser: P,
+        mut encoding_fn: &mut F,
+        parser: &mut P,
+        _index: Option<usize>,
+        _peers: Option<usize>,
     ) -> (Self::MapStructure, Self::EncodedDataSet)
     where
         F: EncodingLogic<Rc<String>, u64>,
@@ -159,7 +200,7 @@ impl Encoder<Rc<String>, u64> for BiMapEncoder {
 
             vec.push(triple);
         }
-        (bimap, vec)
+        (BijectiveMap { bimap }, vec)
     }
 }
 
@@ -193,6 +234,7 @@ mod tests {
     }
 
     use std::fs;
+
     #[test]
     fn parser_test_file() {
         log_init();
@@ -205,26 +247,22 @@ mod tests {
 
         assert_eq!(364, parsed.len());
     }
-    use log::info;
+
     #[test]
     fn encoder_test() {
         log_init();
         let parser = NTriplesParser::new(NTriplesStringParser::new());
         let logic = SimpleLogic::new(0);
-        let bimap = BiMapEncoder::load("data/univ-bench-preprocessed.nt", logic, parser);
+        let bimap = BiMapEncoder::load(
+            "data/test_for_simple_reasoning.nt",
+            logic,
+            parser,
+            None,
+            None,
+        );
         let (dictionary, encoded_dataset) = bimap;
-        for pair in dictionary.iter() {
-            if pair.1 == &1080 || pair.1 == &7 || pair.1 == &1091 {
-                info!("{} <-> {}", pair.0, pair.1);
-            }
-        }
-        for triple in &encoded_dataset {
-            if triple == &(1080, 7, 1091) {
-                info!("{:?}", triple);
-            }
-        }
-        // assert_eq!(3, encoded_dataset.len());
-        // assert_eq!(7, dictionary.len());
-        assert!(true);
+
+        assert_eq!(3, encoded_dataset.len());
+        assert_eq!(7, dictionary.bimap.len());
     }
 }

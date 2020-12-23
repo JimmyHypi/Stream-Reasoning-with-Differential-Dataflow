@@ -4,22 +4,16 @@ extern crate lalrpop_util;
 
 /// Encoder module
 pub mod encoder;
-/*
 pub mod model;
 
-use rio_xml::{RdfXmlParser, RdfXmlError};
-use rio_api::parser::TriplesParser;
-use std::io::BufReader;
-use std::fs::File;
-
-
+/*
 /// Assumptions:
 ///     - No repeated value in the A_Box
-///     - Data uses only ASCII characters
+///     - Data uses only ASCII characters, but IRIs may contain more
 /// function to load the data, parallelized with respect to the number of workers.
 /// At this point of the work multiple workers are not considered because the logic to shuffle the data
 /// is not trivial at all
-pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Triple> {
+pub fn load_data_scrub(filename: &str, index: usize, peers: usize) -> Vec<model::Triple> {
     use std::io::BufRead;
 
     let mut returning_data = Vec::new();
@@ -30,16 +24,13 @@ pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Tripl
     for (count, read_triple) in triples.enumerate() {
         if index == count % peers {
             if let Ok(triple) = read_triple {
-                let v: Vec<String> = triple.split(" ")
-                      .map(|x| String::from(x))
-                      .collect();
-                let triple_to_push =
-                    model::Triple{
-                        // TODO: THESE CLONES, MEH
-                        subject: v[0].clone(),
-                        predicate: v[1].clone(),
-                        object: v[2].clone()
-                    };
+                let v: Vec<String> = triple.split(" ").map(|x| String::from(x)).collect();
+                let triple_to_push = model::Triple {
+                    // TODO: THESE CLONES, MEH
+                    subject: v[0].clone(),
+                    predicate: v[1].clone(),
+                    object: v[2].clone(),
+                };
                 returning_data.push(triple_to_push);
             } else {
                 // TODO
@@ -49,7 +40,9 @@ pub fn load_data(filename: &str, index: usize, peers: usize) -> Vec<model::Tripl
 
     returning_data
 }
+*/
 
+/*
 
 use std::collections::HashSet;
 /// loads the ontology which has already been preprocessed using apache Jena
@@ -166,35 +159,102 @@ fn build_rule(head_literal: model::CustomLiteral, body_literals: [model::CustomL
     }
 }
 
-use timely::dataflow::Scope;
+*/
+
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Collection;
 use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Threshold;
+use differential_dataflow::Collection;
+use encoder::EncodedTriple;
+use timely::dataflow::Scope;
 
 /// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
-pub fn rule_1<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+// [IMPROVEMENT]:
+// The current implementation of the function passes the translated value of S_C_O. My original
+// idea was to pass parameter:
+//      map: E::MapStructure,
+// that as defined in the encoder module implements the BiMapTrait.
+// This allows the filter operator to contain something like:
+//      let v = if let Some(v) = map.get_right(&String::from(&model::S_C_O)) {
+//          v
+//      } else {
+//          panic!("Throw error here");
+//      };
+//      triple.1 == v
+// But this messes up all the lifetime as we would be required to pass the E::MapStructure inside
+// the filter closure. This creates an odd error that I don't fully comprehend. Uncomment the next
+// rule_1 function. To see the error and the overall situation.
+// Passing the sco_value as a V would make the trait BiMapTrait useless..
+
+pub fn rule_1<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    sco_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
     let sco_transitive_closure =
         data_collection
-            .filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
+            //.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
+            .filter(move |triple| triple.1 == sco_value )
             .iterate(|inner| {
 
                 inner
-                    .map(|triple| (triple.object, (triple.subject, triple.predicate)))
-                    .join(&inner.map(|triple| (triple.subject, (triple.predicate, triple.object))))
+                    .map(|triple| (triple.2, (triple.0, triple.1)))
+                    .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
                     .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))|
-                        model::Triple {
-                            subject: subj1,
-                            predicate: pred1,
-                            object: obj2,
-                        }
+                        (subj1, pred1, obj2)
+                    )
+                    .concat(&inner)
+                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
+
+            })
+            //.inspect(|x| println!("AFTER_RULE_1: {:?}", x))
+        ;
+
+    sco_transitive_closure
+}
+
+/*
+/// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
+pub fn rule_1<G, E, K, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    map: E::MapStructure,
+) -> Collection<G, EncodedTriple<V>>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    E: Encoder<K, V>,
+    V: std::cmp::Eq
+        + std::hash::Hash
+        + Clone
+        + differential_dataflow::ExchangeData
+    K: std::cmp::Eq + std::hash::Hash + From<&'static str> + timely::Data,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
+{
+    let sco_transitive_closure =
+        data_collection
+            //.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
+            .filter(|triple| {
+                let value =
+                if let Some(v) = map.get_right(&K::from(model::RDFS_SUB_CLASS_OF)) {
+                    v
+                } else {
+                    panic!("COULD NOT RETRIEVE CONSTNT SUBCLASSOF FROM TABLE");
+                };
+                &triple.1 == value
+            })
+            .iterate(|inner| {
+
+                inner
+                    .map(|triple| (triple.2, (triple.0, triple.1)))
+                    .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
+                    .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))|
+                        (subj1, pred1, obj2)
                     )
                     .concat(&inner)
                     .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
@@ -205,322 +265,322 @@ where
         ;
 
     sco_transitive_closure
-
 }
-
+*/
 
 /// Second rule: T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
-pub fn rule_2<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+pub fn rule_2<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    spo_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
-    let spo_transitive_closure =
-        data_collection
-            .filter(|triple| triple.predicate == model::RDFS_SUB_PROPERTY_OF)
-            .iterate(|inner| {
-
-                inner
-                    .map(|triple| (triple.object, (triple.subject, triple.predicate)))
-                    .join(&inner.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-                    .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))|
-                        model::Triple {
-                            subject: subj1,
-                            predicate: pred1,
-                            object: obj2,
-                        }
-                    )
-                    .concat(&inner)
-                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
-
-            })
-            ;
+    let spo_transitive_closure = data_collection
+        .filter(move |triple| triple.1 == spo_value)
+        .iterate(|inner| {
+            inner
+                .map(|triple| (triple.2, (triple.0, triple.1)))
+                .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
+                .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| (subj1, pred1, obj2))
+                .concat(&inner)
+                .threshold(|_, c| {
+                    if c > &0 {
+                        1
+                    } else if c < &0 {
+                        -1
+                    } else {
+                        0
+                    }
+                })
+        });
 
     spo_transitive_closure
 }
 
 /// Third rule: T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
-pub fn rule_3<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+pub fn rule_3<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    type_value: V,
+    sco_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
-    let sco_only =
-        data_collection.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
-        ;
+    let sco_only = data_collection.filter(move |triple| triple.1 == sco_value);
 
-    let candidates =
-        data_collection
-            .filter(|triple| triple.predicate == model::RDF_TYPE)
-            .map(|triple| (triple.object.clone(), (triple)))
-            .join(&sco_only.map(|triple| (triple.subject, ())))
-            .map(|(_key, (triple, ()))| triple)
-            ;
+    let candidates = data_collection
+        .filter(move |triple| triple.1 == type_value)
+        .map(|triple| (triple.2.clone(), (triple)))
+        .join(&sco_only.map(|triple| (triple.0, ())))
+        .map(|(_key, (triple, ()))| triple);
 
-    let sco_type_rule =
-        candidates
-            .iterate(|inner| {
-                let sco_only_in =
-                    sco_only
-                        .enter(&inner.scope())
-                        ;
+    let sco_type_rule = candidates.iterate(|inner| {
+        let sco_only_in = sco_only.enter(&inner.scope());
 
-                inner
-                    .map(|triple| (triple.object, (triple.subject, triple.predicate)))
-                    .join(&sco_only_in.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-                    .map(|(_key, ((x, typ), (_sco, b)))|
-                        model::Triple {
-                            subject: x,
-                            predicate: typ,
-                            object: b
-                        }
-                    )
-                    .concat(&inner)
-                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
+        inner
+            .map(|triple| (triple.2, (triple.0, triple.1)))
+            .join(&sco_only_in.map(|triple| (triple.0, (triple.1, triple.2))))
+            .map(|(_key, ((x, typ), (_sco, b)))| (x, typ, b))
+            .concat(&inner)
+            .threshold(|_, c| {
+                if c > &0 {
+                    1
+                } else if c < &0 {
+                    -1
+                } else {
+                    0
+                }
             })
-            ;
+    });
 
     sco_type_rule
 }
 
 /// Fourth rule: T(x, p, b) <= T(p1, SPO, p),T(x, p1, y)
-pub fn rule_4<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+pub fn rule_4<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    spo_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
     // Select only the triples whose predicate participates in a SPO triple
-    let spo_only_out =
-        data_collection
-            .filter(|triple| triple.predicate == model::RDFS_SUB_PROPERTY_OF)
-        ;
+    let spo_only_out = data_collection.filter(move |triple| triple.1 == spo_value);
 
-    let candidates =
-        data_collection
-            .map(|triple| ((triple.predicate.clone()),triple))
-            .join(&spo_only_out.map(|triple| ((triple.subject),())))
-            .map(|(_, (triple, ()))| triple)
-            ;
+    let candidates = data_collection
+        .map(|triple| ((triple.1.clone()), triple))
+        .join(&spo_only_out.map(|triple| ((triple.0), ())))
+        .map(|(_, (triple, ()))| triple);
 
-    let spo_type_rule =
-        candidates
-            .iterate(|inner| {
-                let spo_only =
-                    spo_only_out
-                        .enter(&inner.scope())
-                        ;
-                inner
-                    .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-                    .join(&spo_only.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-                    .map(|(_key, ((x, y), (_spo, p)))|
-                        model::Triple {
-                            subject: x,
-                            predicate: p,
-                            object: y,
-                        }
-                    )
-                    .concat(&inner)
-                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
+    let spo_type_rule = candidates.iterate(|inner| {
+        let spo_only = spo_only_out.enter(&inner.scope());
+        inner
+            .map(|triple| (triple.1, (triple.0, triple.2)))
+            .join(&spo_only.map(|triple| (triple.0, (triple.1, triple.2))))
+            .map(|(_key, ((x, y), (_spo, p)))| (x, p, y))
+            .concat(&inner)
+            .threshold(|_, c| {
+                if c > &0 {
+                    1
+                } else if c < &0 {
+                    -1
+                } else {
+                    0
+                }
             })
-            ;
+    });
     spo_type_rule
 }
 
 /// Fifth rule: T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
-pub fn rule_5<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+pub fn rule_5<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    domain_value: V,
+    type_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
-    let only_domain =
-        data_collection
-            .filter(|triple| triple.predicate == model::RDFS_DOMAIN)
-            ;
+    let only_domain = data_collection.filter(move |triple| triple.1 == domain_value);
 
-    let candidates =
-        data_collection
-            .map(|triple| ((triple.predicate.clone()),triple))
-            .join(&only_domain.map(|triple| (triple.subject, ())))
-            .map(|(_, (triple, ()))| triple)
-            ;
+    let candidates = data_collection
+        .map(|triple| ((triple.1.clone()), triple))
+        .join(&only_domain.map(|triple| (triple.0, ())))
+        .map(|(_, (triple, ()))| triple);
 
     // This does not require a iterative dataflow, the rule does not produce
     // terms that are used by the rule itself
-    let domain_type_rule =
-        candidates
-            .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-            .join(&only_domain.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-            .map(|(_key, ((a, _b), (_dom, d)))|
-                model::Triple {
-                    subject: a,
-                    predicate: String::from(model::RDF_TYPE),
-                    object: d,
-                }
-            )
-            ;
+    let domain_type_rule = candidates
+        .map(|triple| (triple.1, (triple.0, triple.2)))
+        .join(&only_domain.map(|triple| (triple.0, (triple.1, triple.2))))
+        .map(move |(_key, ((a, _b), (_dom, d)))| (a, type_value, d));
 
     domain_type_rule
 }
 
 /// Sixth rule: T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
-pub fn rule_6<G>(
-    data_collection: &Collection<G, model::Triple>,
-) -> Collection<G, model::Triple>
+pub fn rule_6<G, V>(
+    data_collection: &Collection<G, EncodedTriple<V>>,
+    range_value: V,
+    type_value: V,
+) -> Collection<G, EncodedTriple<V>>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
-    let only_range =
-        data_collection
-            .filter(|triple| triple.predicate == model::RDFS_RANGE)
-            ;
+    let only_range = data_collection.filter(move |triple| triple.1 == range_value);
 
-    let candidates =
-        data_collection
-            .map(|triple| ((triple.predicate.clone()),triple))
-            .join(&only_range.map(|triple| (triple.subject, ())))
-            .map(|(_, (triple, ()))| triple)
-            ;
+    let candidates = data_collection
+        .map(|triple| ((triple.1.clone()), triple))
+        .join(&only_range.map(|triple| (triple.0, ())))
+        .map(|(_, (triple, ()))| triple);
 
     // This does not require a iterative dataflow, the rule does not produce
     // terms that are used by the rule itself
-    let domain_type_rule =
-        candidates
-            .map(|triple| (triple.predicate, (triple.subject, triple.object)))
-            .join(&only_range.map(|triple| (triple.subject, (triple.predicate, triple.object))))
-            .map(|(_key, ((_a, b), (_ran, r)))|
-                model::Triple {
-                    subject: b,
-                    predicate: String::from(model::RDF_TYPE),
-                    object: r,
-                }
-            )
-            ;
+    let domain_type_rule = candidates
+        .map(|triple| (triple.1, (triple.0, triple.2)))
+        .join(&only_range.map(|triple| (triple.0, (triple.1, triple.2))))
+        .map(move |(_key, ((_a, b), (_ran, r)))| (b, type_value, r));
 
     domain_type_rule
 }
 
-
+use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;
-use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
-use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
+use timely::dataflow::ProbeHandle;
 
 /// Computes the full materialization of the collection
-pub fn full_materialization<G>(
-    data_input: &Collection<G, model::Triple>,
+pub fn full_materialization<G, K, V>(
+    data_input: &Collection<G, EncodedTriple<V>>,
     mut probe: &mut ProbeHandle<G::Timestamp>,
-) -> TraceAgent<OrdKeySpine<model::Triple, G::Timestamp, isize>>
+    // Contract:
+    // rdfs_keywords[0] = sub_class_of
+    // rdfs_keywords[1] = sub_property_of
+    // rdfs_keywords[2] = sub_type
+    // rdfs_keywords[3] = sub_domain
+    // rdfs_keywords[4] = sub_range
+    // [IMPROVEMENT]:
+    // Maybe an HashMap here? Seems overkill still
+    rdfs_keywords: &[V; 5],
+) -> TraceAgent<OrdKeySpine<EncodedTriple<V>, G::Timestamp, isize>>
 where
     G: Scope,
-    G::Timestamp: Lattice
+    G::Timestamp: Lattice,
+    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
+    K: std::cmp::Eq + std::hash::Hash + From<&'static str> + timely::Data,
+    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
     // ASSUMPTION: WE ARE HARDCODING THE RULES IN HERE
-            // We only have two kinds of rules:
-            // the ones that deal with only the T_box:
-            // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
-            // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
-            // the ones that deal with both the a_box and the t_box
-            // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
-            // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)
-            // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
-            // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
+    // We only have two kinds of rules:
+    // the ones that deal with only the T_box:
+    // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
+    // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
+    // the ones that deal with both the a_box and the t_box
+    // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
+    // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)
+    // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
+    // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
 
+    // Orders matters, to guarantee a correct execution of the materialization:
+    // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)        -- rule_1
+    // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)        -- rule_2
+    // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)          -- rule_4
+    // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)      -- rule_5
+    // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)       -- rule_6
+    // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)      -- rule_3
+    // as we can see there is no rule with a literal in the body that
+    // corresponds to a literal in the head of any subsequent rule
 
+    let sco_transitive_closure = rule_1(&data_input, rdfs_keywords[0]);
 
-            // Orders matters, to guarantee a correct execution of the materialization:
-            // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)        -- rule_1
-            // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)        -- rule_2
-            // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)          -- rule_4
-            // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)      -- rule_5
-            // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)       -- rule_6
-            // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)      -- rule_3
-            // as we can see there is no rule with a literal in the body that
-            // corresponds to a literal in the head of any subsequent rule
+    let spo_transitive_closure = rule_2(&data_input, rdfs_keywords[1]);
 
+    let data_input = data_input
+        .concat(&sco_transitive_closure)
+        .concat(&spo_transitive_closure)
+        //  VERY IMPORTANT: THE DISTINCT PUTS THE REMOVAL INTO ADDITION
+        // SO WE REWRITE THE DISTINCT TO KEEP THE REMOVAL -1
+        // .distinct()
+        .threshold(|_, c| {
+            if c > &0 {
+                1
+            } else if c < &0 {
+                -1
+            } else {
+                0
+            }
+        });
 
-            let sco_transitive_closure = rule_1(&data_input);
+    let spo_type_rule = rule_4(&data_input, rdfs_keywords[1]);
 
-            let spo_transitive_closure = rule_2(&data_input);
+    let data_input = data_input
+        .concat(&spo_type_rule)
+        // .distinct()
+        .threshold(|_, c| {
+            if c > &0 {
+                1
+            } else if c < &0 {
+                -1
+            } else {
+                0
+            }
+        });
 
-            let data_input = data_input
-                                .concat(&sco_transitive_closure)
-                                .concat(&spo_transitive_closure)
-                                //  VERY IMPORTANT: THE DISTINCT PUTS THE REMOVAL INTO ADDITION
-                                // SO WE REWRITE THE DISTINCT TO KEEP THE REMOVAL -1
-                                // .distinct()
-                                .threshold(|_,c| {
-                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
-                                 })
-                                ;
+    let domain_type_rule = rule_5(&data_input, rdfs_keywords[3], rdfs_keywords[2]);
 
+    // We don't need this, but still :P
+    let data_input = data_input
+        .concat(&domain_type_rule)
+        // .distinct()
+        .threshold(|_, c| {
+            if c > &0 {
+                1
+            } else if c < &0 {
+                -1
+            } else {
+                0
+            }
+        });
 
-            let spo_type_rule = rule_4(&data_input);
+    let range_type_rule = rule_6(&data_input, rdfs_keywords[4], rdfs_keywords[2]);
 
-            let data_input = data_input
-                                .concat(&spo_type_rule)
-                                // .distinct()
-                                .threshold(|_,c| {
-                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
-                                 })
-                                ;
+    let data_input = data_input
+        .concat(&range_type_rule)
+        // .distinct()
+        .threshold(|_, c| {
+            if c > &0 {
+                1
+            } else if c < &0 {
+                -1
+            } else {
+                0
+            }
+        });
 
-            let domain_type_rule = rule_5(&data_input);
+    let sco_type_rule = rule_3(&data_input, rdfs_keywords[2], rdfs_keywords[0]);
 
-            // We don't need this, but still :P
-            let data_input = data_input
-                                .concat(&domain_type_rule)
-                                // .distinct()
-                                .threshold(|_,c| {
-                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
-                                 })
-                                ;
+    let data_input = data_input
+        .concat(&sco_type_rule)
+        // .distinct()
+        .threshold(|_, c| {
+            if c > &0 {
+                1
+            } else if c < &0 {
+                -1
+            } else {
+                0
+            }
+        });
 
-            let range_type_rule = rule_6(&data_input);
+    let arrangement = data_input
+        // .inspect(|triple| (triple.0).print_easy_reading())
+        // .inspect(|triple| println!("{:?}", triple))
+        // .inspect(|x| println!("{:?}", x))
+        .arrange_by_self();
 
-            let data_input = data_input
-                                .concat(&range_type_rule)
-                                // .distinct()
-                                .threshold(|_,c| {
-                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
-                                 })
-                                ;
+    arrangement.stream.probe_with(&mut probe);
 
-            let sco_type_rule = rule_3(&data_input);
-
-            let data_input = data_input
-                                .concat(&sco_type_rule)
-                                // .distinct()
-                                .threshold(|_,c| {
-                                    if c > &0 { 1 } else if c < &0 { -1 } else { 0 }
-                                 })
-                                ;
-
-            let arrangement =
-                data_input
-                    // .inspect(|triple| (triple.0).print_easy_reading())
-                    // .inspect(|triple| println!("{:?}", triple))
-                    // .inspect(|x| println!("{:?}", x))
-                    .arrange_by_self()
-                    ;
-
-            arrangement
-                .stream
-                .probe_with(&mut probe)
-                ;
-
-            arrangement.trace
+    arrangement.trace
 }
 
+/*
 use differential_dataflow::input::InputSession;
 /// Sets up the data for to use for the full materialization
 /// Here some preprocessing is required, we hav to eliminate all the owl tags and change the "terminological type" to distinguish it from the axiomatic one
@@ -528,7 +588,7 @@ pub fn load_lubm_data(
     a_box_filename: &str,
     t_box_filename: &str,
     index: usize,
-    peers: usize
+    peers: usize,
 ) -> (Vec<model::Triple>, Vec<model::Triple>) {
     // let a_box = reasoning_service::load_data(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\LUB1_nt_consolidated\\Universities.nt"), index, peers);
     let a_box = load_data(a_box_filename, index, peers);
@@ -538,7 +598,8 @@ pub fn load_lubm_data(
     let t_box = preprocess(t_box);
     (t_box, a_box)
 }
-
+*/
+/*
 fn preprocess(t_box: HashSet<model::Triple>) -> Vec<model::Triple> {
     let mut res: Vec<model::Triple> = Vec::new();
     // TODO: Preprocess the data restricting only triples in rdfs (RhoDF)
@@ -547,17 +608,77 @@ fn preprocess(t_box: HashSet<model::Triple>) -> Vec<model::Triple> {
     }
     res
 }
+*/
 
+use differential_dataflow::input::InputSession;
 
+// [IMPROVEMENT]:
+// Unlike the first part of the software, the ontology is required to be in the ntriples
+// format as that's the only parser that I have as of right now. So this works for both
+// ontology and abox. Implement a parser for other serialization methods?
+use encoder::{Encoder, EncodingLogic, ParserTrait};
+pub fn load_data<E, K, V, P, F>(
+    file_name: &str,
+    index: Option<usize>,
+    peers: Option<usize>,
+    parser: &mut P,
+    encoding_logic: &mut F,
+) -> (E::MapStructure, E::EncodedDataSet)
+where
+    E: Encoder<K, V>,
+    P: ParserTrait<K>,
+    F: EncodingLogic<K, V>,
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    E::load(file_name, encoding_logic, parser, index, peers)
+}
+
+pub fn load_data_same_encoder<E, K, V, P, F>(
+    a_box_filename: &str,
+    t_box_filename: &str,
+    index: Option<usize>,
+    peers: Option<usize>,
+    parser: &mut P,
+    encoding_logic: &mut F,
+) -> (
+    (E::MapStructure, E::EncodedDataSet),
+    (E::MapStructure, E::EncodedDataSet),
+)
+where
+    E: Encoder<K, V>,
+    P: ParserTrait<K>,
+    F: EncodingLogic<K, V>,
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    let a_box = load_data::<E, K, V, P, F>(a_box_filename, index, peers, parser, encoding_logic);
+    let t_box = load_data::<E, K, V, P, F>(t_box_filename, index, peers, parser, encoding_logic);
+    (t_box, a_box)
+}
 /// insert data provided by the abox and tbox into the dataflow through
-/// the input handles. Here all the
-pub fn insert_starting_data(
-    a_box: Vec<model::Triple>,
-    data_input: &mut InputSession<usize, model::Triple, isize>,
-    t_box: Vec<model::Triple>,
-) {
-
-
+/// the input handles.
+/// Contract: the a box and the t box use the same encoder. Using the load_lubm_data
+/// function it is guaranteed that they do.
+pub fn insert_starting_data<E, K, V>(
+    a_box: E::EncodedDataSet,
+    data_input: &mut InputSession<
+        usize,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        isize,
+    >,
+    t_box: E::EncodedDataSet,
+) where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
     for triple in t_box {
         data_input.insert(triple);
     }
@@ -566,16 +687,31 @@ pub fn insert_starting_data(
     }
 
     // initial data are inserted all with timestamp 0, so we advance at time 1 and schedule the worker
-    data_input.advance_to(1); data_input.flush();
+    data_input.advance_to(1);
+    data_input.flush();
 }
 
 /// Incremental addition maintenance
-pub fn add_data(
-    a_box_batch: Vec<model::Triple>,
-    data_input: &mut InputSession<usize, model::Triple, isize>,
-    t_box_batch: Vec<model::Triple>,
-    time_to_advance_to: usize
-) {
+pub fn add_data<E, K, V>(
+    a_box_batch: E::EncodedDataSet,
+    data_input: &mut InputSession<
+        usize,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        isize,
+    >,
+    t_box_batch: E::EncodedDataSet,
+    time_to_advance_to: usize,
+) where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
     for triple in t_box_batch {
         data_input.insert(triple);
     }
@@ -584,18 +720,32 @@ pub fn add_data(
         data_input.insert(triple);
     }
 
-    data_input.advance_to(time_to_advance_to); data_input.flush();
+    data_input.advance_to(time_to_advance_to);
+    data_input.flush();
 }
 
 // ASSUMPTION: closed world: if `something sco something_else` is missing it means that it is not true that `something sco something_else`
 /// Incremental deletion maintenance:
-pub fn remove_data(
-    a_box_batch: Vec<model::Triple>,
-    data_input: &mut InputSession<usize, model::Triple, isize>,
-    t_box_batch: Vec<model::Triple>,
-    time_to_advance_to: usize
-) {
-
+pub fn remove_data<E, K, V>(
+    a_box_batch: E::EncodedDataSet,
+    data_input: &mut InputSession<
+        usize,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        isize,
+    >,
+    t_box_batch: E::EncodedDataSet,
+    time_to_advance_to: usize,
+) where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
     for triple in t_box_batch {
         data_input.remove(triple);
     }
@@ -604,21 +754,36 @@ pub fn remove_data(
         data_input.remove(triple);
     }
 
-
-    data_input.advance_to(time_to_advance_to); data_input.flush();
+    data_input.advance_to(time_to_advance_to);
+    data_input.flush();
 }
 
 /// Save the full materialization fo file
-pub fn save_to_file_through_trace(
+pub fn save_to_file_through_trace<E, K, V>(
     path: &str,
-    trace: &mut TraceAgent<OrdKeySpine<model::Triple, usize, isize>>,
-    time: usize
-)
+    trace: &mut TraceAgent<
+        OrdKeySpine<
+            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+            usize,
+            isize,
+        >,
+    >,
+    time: usize,
+) where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
 {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    use differential_dataflow::trace::TraceReader;
     use differential_dataflow::trace::cursor::Cursor;
+    use differential_dataflow::trace::TraceReader;
+    // use std::fs::OpenOptions;
+    // use std::io::Write;
 
     // let mut full_materialization_file = OpenOptions::new()
     //     .read(true)
@@ -628,20 +793,20 @@ pub fn save_to_file_through_trace(
     //     .open(path)
     //     .expect("Something wrong happened with the ouput file");
 
-    if let Some((mut cursor, storage)) = trace.cursor_through(&[time]){
+    if let Some((mut cursor, storage)) = trace.cursor_through(&[time]) {
         while let Some(key) = cursor.get_key(&storage) {
             while let Some(&()) = cursor.get_val(&storage) {
                 let mut count = 0;
                 use timely::order::PartialOrder;
                 cursor.map_times(&storage, |t, diff| {
                     // println!("{}, DIFF:{:?} ", key, diff);
-                    if t.less_equal(&(time-1)) {
+                    if t.less_equal(&(time - 1)) {
                         count += diff;
                     }
                 });
                 if count > 0 {
-                    // println!("{}", key);
-                    key.print_easy_reading();
+                    println!("{:?}", key);
+                    // key.print_easy_reading();
                     // if let Err(e) = writeln!(full_materialization_file, "{}", key.to_string()) {
                     //     eprintln!("Couldn't write to file: {}", e);
                     // }
@@ -653,37 +818,77 @@ pub fn save_to_file_through_trace(
     } else {
         println!("COULDN'T GET CURSOR");
     }
-
 }
 
+/*
+/// Save the full materialization fo file
+pub fn save_to_file_through_trace<E, K, V>(
+    path: &str,
+    trace: &mut TraceAgent<
+        OrdKeySpine<
+            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+            usize,
+            isize,
+        >,
+    >,
+    time: usize,
+) where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+
+*/
 
 /// Saves the fragment of the materialization related to a worker in a vector so that it can be joined to create
 /// the full file. TODO: IS THIS A LITTLE EXPENSIVE
-pub fn return_vector(
-    trace: &mut TraceAgent<OrdKeySpine<model::Triple, usize, isize>>,
-    time: usize
-) -> Vec<String>
+pub fn return_vector<E, K, V>(
+    trace: &mut TraceAgent<
+        OrdKeySpine<
+            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+            usize,
+            isize,
+        >,
+    >,
+    time: usize,
+) -> Vec<<<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item>
+where
+    E: Encoder<K, V>,
+    E::EncodedDataSet: std::iter::Iterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+        std::fmt::Debug + Clone + Ord + 'static,
+    // [IMPROVEMENT]:
+    // Try to understand why V has to be 'static and think of the impact that
+    // a static V has on performance.
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
 {
-    use differential_dataflow::trace::TraceReader;
     use differential_dataflow::trace::cursor::Cursor;
+    use differential_dataflow::trace::TraceReader;
 
     let mut res = Vec::new();
 
-    if let Some((mut cursor, storage)) = trace.cursor_through(&[time]){
+    if let Some((mut cursor, storage)) = trace.cursor_through(&[time]) {
         while let Some(key) = cursor.get_key(&storage) {
             while let Some(&()) = cursor.get_val(&storage) {
                 let mut count = 0;
                 use timely::order::PartialOrder;
                 cursor.map_times(&storage, |t, diff| {
                     // println!("{}, DIFF:{:?} ", key, diff);
-                    if t.less_equal(&(time-1)) {
+                    if t.less_equal(&(time - 1)) {
                         count += diff;
                     }
                 });
                 if count > 0 {
-                    // println!("{}", key);
+                    println!("{:?}", key);
                     // key.print_easy_reading();
-                    res.push(key.to_string());
+                    res.push(key.clone());
                 }
                 cursor.step_val(&storage);
             }
@@ -695,7 +900,7 @@ pub fn return_vector(
 
     res
 }
-
+/*
 /// Concatenates the different fragments into the final file
 pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
     use std::fs::OpenOptions;

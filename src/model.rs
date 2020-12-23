@@ -4,7 +4,7 @@ use abomonation_derive::Abomonation;
 /// This struct represents an RDF triple
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Ord, PartialOrd, Abomonation)]
 pub struct Triple {
-    // the ord and partialOrd needed to allow the creation of a 
+    // the ord and partialOrd needed to allow the creation of a
     // differential dataflow collection
     /// subject of the triple
     pub subject: String,
@@ -25,25 +25,36 @@ pub static RDFS_RANGE: &str = "<http://www.w3.org/2000/01/rdf-schema#range>";
 /// URI of rdf:type
 pub static RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 
-
 impl Triple {
     /// Prints only the local name with no namespace, just for easy reading
     pub fn print_easy_reading(&self) {
         if let Some(n) = self.subject.as_str().find('#') {
-            print!("{} ", &(self.subject.as_str())[n..self.subject.as_str().len()-1]);
+            print!(
+                "{} ",
+                &(self.subject.as_str())[n..self.subject.as_str().len() - 1]
+            );
         } else {
             // something like <http://www.Department0.University0.edu/FullProfessor7>
             let res: Vec<&str> = self.subject.as_str().split('/').collect();
-            print!("{} ", &(res[res.len()-1])[..(res[res.len()-1].len()-1)]);
+            print!(
+                "{} ",
+                &(res[res.len() - 1])[..(res[res.len() - 1].len() - 1)]
+            );
         }
         if let Some(n) = self.predicate.as_str().find('#') {
-            print!("{} ", &(self.predicate.as_str())[n..self.predicate.as_str().len()-1]);
+            print!(
+                "{} ",
+                &(self.predicate.as_str())[n..self.predicate.as_str().len() - 1]
+            );
         } else {
             // a label like "is member of"
             print!("{}", self.predicate);
         }
         if let Some(n) = self.object.as_str().find('#') {
-            println!("{} ", &(self.object.as_str())[n..self.object.as_str().len()-1]);
+            println!(
+                "{} ",
+                &(self.object.as_str())[n..self.object.as_str().len() - 1]
+            );
         } else {
             // in case of labels we have no #
             println!("{} ", self.object);
@@ -52,15 +63,14 @@ impl Triple {
 }
 
 use std::fmt;
-impl fmt::Display for Triple{
+impl fmt::Display for Triple {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {} {} .", self.subject, self.predicate, self.object)
     }
 }
 
-
 /// This struct represents a rule for our specific problem:
-/// it has a head, that is a single literal and it has a 
+/// it has a head, that is a single literal and it has a
 /// body that is two literals
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct CustomRule {
@@ -72,7 +82,11 @@ pub struct CustomRule {
 
 impl std::fmt::Display for CustomRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "T({}) <= T({}),T({})", self.head, self.body[0], self.body[1])
+        write!(
+            f,
+            "T({}) <= T({}),T({})",
+            self.head, self.body[0], self.body[1]
+        )
     }
 }
 
@@ -81,7 +95,7 @@ impl std::fmt::Display for CustomRule {
 /// belonging to the data set
 /// Our literals will have one predicate and a vector of three terms
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct CustomLiteral{
+pub struct CustomLiteral {
     // for now I'm going to model all of this with strings
     /// terms of the literal
     pub tuple_of_terms: [PossibleTerm; 3],
@@ -89,7 +103,11 @@ pub struct CustomLiteral{
 
 impl std::fmt::Display for CustomLiteral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}, {}", self.tuple_of_terms[0], self.tuple_of_terms[1], self.tuple_of_terms[2])
+        write!(
+            f,
+            "{}, {}, {}",
+            self.tuple_of_terms[0], self.tuple_of_terms[1], self.tuple_of_terms[2]
+        )
     }
 }
 /// a constant value is an alias for a string for now
@@ -116,10 +134,9 @@ impl std::fmt::Display for PossibleTerm {
     }
 }
 
-
 /// Words in rho-df. Maybe better if they were integer ids.
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub enum RhoDFWord{
+pub enum RhoDFWord {
     /// rdfs:subPropertyOf
     SPO,
     /// rdfs:subClassOf
@@ -143,7 +160,6 @@ impl std::fmt::Display for RhoDFWord {
         }
     }
 }
-
 
 #[derive(Debug)]
 /// Contains full materialization statistics
@@ -169,7 +185,6 @@ impl Statistics {
         }
     }
 }
-
 
 #[derive(Debug)]
 /// Contains inc materialization statistics
