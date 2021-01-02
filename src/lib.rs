@@ -464,7 +464,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
     V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    K: std::cmp::Eq + std::hash::Hash + From<&'static str> + timely::Data,
+    K: std::cmp::Eq + std::hash::Hash + timely::Data,
     EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
 {
     // ASSUMPTION: WE ARE HARDCODING THE RULES IN HERE
@@ -631,20 +631,17 @@ where
     V: std::cmp::Eq + std::hash::Hash,
     K: std::cmp::Eq + std::hash::Hash,
 {
-    E::load(file_name, encoding_logic, parser, index, peers)
+    E::load_from_file(file_name, encoding_logic, parser, index, peers)
 }
-
-pub fn load_data_same_encoder<E, K, V, P, F>(
+// It is important that the returned map includes the encoding of both the a_box and t_box
+pub fn load_data_same_encoder_same_encoded_dataset<E, K, V, P, F>(
     a_box_filename: &str,
     t_box_filename: &str,
     index: Option<usize>,
     peers: Option<usize>,
     parser: &mut P,
     encoding_logic: &mut F,
-) -> (
-    (E::MapStructure, E::EncodedDataSet),
-    (E::MapStructure, E::EncodedDataSet),
-)
+) -> (E::MapStructure, E::EncodedDataSet)
 where
     E: Encoder<K, V>,
     P: ParserTrait<K>,
@@ -652,10 +649,40 @@ where
     V: std::cmp::Eq + std::hash::Hash,
     K: std::cmp::Eq + std::hash::Hash,
 {
-    let a_box = load_data::<E, K, V, P, F>(a_box_filename, index, peers, parser, encoding_logic);
-    let t_box = load_data::<E, K, V, P, F>(t_box_filename, index, peers, parser, encoding_logic);
-    (t_box, a_box)
+    E::load_from_multiple_files_same_encoded_dataset(
+        &[a_box_filename, t_box_filename],
+        encoding_logic,
+        parser,
+        index,
+        peers,
+    )
 }
+
+// It is important that the returned map includes the encoding of both the a_box and t_box
+pub fn load_data_same_encoder_different_encoded_dataset<E, K, V, P, F>(
+    a_box_filename: &str,
+    t_box_filename: &str,
+    index: Option<usize>,
+    peers: Option<usize>,
+    parser: &mut P,
+    encoding_logic: &mut F,
+) -> (E::MapStructure, Vec<E::EncodedDataSet>)
+where
+    E: Encoder<K, V>,
+    P: ParserTrait<K>,
+    F: EncodingLogic<K, V>,
+    V: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    E::load_from_multiple_files_different_encoded_dataset(
+        &[a_box_filename, t_box_filename],
+        encoding_logic,
+        parser,
+        index,
+        peers,
+    )
+}
+
 /// insert data provided by the abox and tbox into the dataflow through
 /// the input handles.
 /// Contract: the a box and the t box use the same encoder. Using the load_lubm_data
@@ -664,14 +691,14 @@ pub fn insert_starting_data<E, K, V>(
     a_box: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
     t_box: E::EncodedDataSet,
 ) where
     E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+    E::EncodedDataSet: std::iter::IntoIterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
@@ -696,15 +723,15 @@ pub fn add_data<E, K, V>(
     a_box_batch: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
     t_box_batch: E::EncodedDataSet,
     time_to_advance_to: usize,
 ) where
     E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+    E::EncodedDataSet: std::iter::IntoIterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
@@ -730,15 +757,15 @@ pub fn remove_data<E, K, V>(
     a_box_batch: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
     t_box_batch: E::EncodedDataSet,
     time_to_advance_to: usize,
 ) where
     E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+    E::EncodedDataSet: std::iter::IntoIterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
@@ -763,7 +790,7 @@ pub fn save_to_file_through_trace<E, K, V>(
     path: &str,
     trace: &mut TraceAgent<
         OrdKeySpine<
-            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
             usize,
             isize,
         >,
@@ -771,8 +798,8 @@ pub fn save_to_file_through_trace<E, K, V>(
     time: usize,
 ) where
     E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+    E::EncodedDataSet: std::iter::IntoIterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
@@ -851,17 +878,17 @@ pub fn save_to_file_through_trace<E, K, V>(
 pub fn return_vector<E, K, V>(
     trace: &mut TraceAgent<
         OrdKeySpine<
-            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
+            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
             usize,
             isize,
         >,
     >,
     time: usize,
-) -> Vec<<<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item>
+) -> Vec<<<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item>
 where
     E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
+    E::EncodedDataSet: std::iter::IntoIterator,
+    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
@@ -886,7 +913,7 @@ where
                     }
                 });
                 if count > 0 {
-                    println!("{:?}", key);
+                    // println!("{:?}", key);
                     // key.print_easy_reading();
                     res.push(key.clone());
                 }

@@ -15,15 +15,15 @@ pub struct Triple {
 }
 
 /// URI of the rdfs:subClassOf
-pub static RDFS_SUB_CLASS_OF: &str = "<http://www.w3.org/2000/01/rdf-schema#subClassOf>";
+pub static RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 /// URI of the rdfs:subPropertyOf
-pub static RDFS_SUB_PROPERTY_OF: &str = "<http://www.w3.org/2000/01/rdf-schema#subPropertyOf>";
+pub static RDFS_SUB_PROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
 /// URI of the rdfs::domain
-pub static RDFS_DOMAIN: &str = "<http://www.w3.org/2000/01/rdf-schema#domain>";
+pub static RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
 /// URI of the rdfs::range
-pub static RDFS_RANGE: &str = "<http://www.w3.org/2000/01/rdf-schema#range>";
+pub static RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
 /// URI of rdf:type
-pub static RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+pub static RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 impl Triple {
     /// Prints only the local name with no namespace, just for easy reading
