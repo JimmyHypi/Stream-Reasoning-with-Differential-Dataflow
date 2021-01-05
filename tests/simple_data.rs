@@ -1,12 +1,12 @@
 use differential_dataflow::input::Input;
-use log::{debug, error, info};
-use reasoning_service::encoder::{
-    BiMapEncoder, BiMapTrait, EncodedTriple, Encoder, NTriplesParser, ParserTrait, SimpleLogic,
-};
+use log::info;
+use reasoning_service::encoder::{BiMapEncoder, BiMapTrait, Encoder, NTriplesParser, SimpleLogic};
 use reasoning_service::model::{
     RDFS_DOMAIN, RDFS_RANGE, RDFS_SUB_CLASS_OF, RDFS_SUB_PROPERTY_OF, RDF_TYPE,
 };
 use std::rc::Rc;
+
+type EncodedTriple<T> = (T, T, T);
 
 #[test]
 fn dataflow_integration_test() {
@@ -23,7 +23,7 @@ fn dataflow_integration_test() {
         let index = worker.index();
         let peers = worker.peers();
 
-        let mut parser = NTriplesParser::new_default();
+        let mut parser = NTriplesParser::new();
         let mut encoding_logic = SimpleLogic::new(0);
 
         // Track progress
@@ -36,20 +36,21 @@ fn dataflow_integration_test() {
         // [IMPROVEMENT]:
         // The current implementation of the bimap does not use the index and peers variables.
         // Fix it to make it parallel
-        let (map, mut vec) = reasoning_service::load_data_same_encoder_different_encoded_dataset::<
-            BiMapEncoder,
-            Rc<String>,
-            u64,
-            NTriplesParser,
-            SimpleLogic,
-        >(
-            a_box_filename,
-            t_box_filename,
-            Some(index),
-            Some(peers),
-            &mut parser,
-            &mut encoding_logic,
-        );
+        let (mut map, mut vec) =
+            reasoning_service::load_data_same_encoder_different_encoded_dataset::<
+                BiMapEncoder,
+                Rc<String>,
+                u64,
+                NTriplesParser,
+                SimpleLogic,
+            >(
+                a_box_filename,
+                t_box_filename,
+                Some(index),
+                Some(peers),
+                &mut parser,
+                &mut encoding_logic,
+            );
         // According to the contract these are safe pops
         let t_data = vec.pop().expect("NO TBOX IN THE ENCODED DATASETS");
         let a_data = vec.pop().expect("NO ABOX IN THE ENCODED DATASETS");
@@ -74,10 +75,7 @@ fn dataflow_integration_test() {
             *map.get_right(&Rc::from(String::from(RDFS_RANGE)))
                 .expect("THERE IS NO RANGE"),
         ];
-        info!("{:#?}", rdfs_keywords);
-        info!("String Map:\n{:#?}", map);
-        info!("TBox Encoded:\n{:?}", t_data);
-        info!("ABox Encoded:\n{:#?}", a_data);
+
         let (mut data_input, mut result_trace) = worker.dataflow::<usize, _, _>(|scope| {
             // [IMPROVEMENT]:
             // To get the type of the data in the dataflow I have to hard code it and put
@@ -85,8 +83,7 @@ fn dataflow_integration_test() {
             // Another associated type "Item". One way could be to make the EncodedDataSet to
             // implement Iterator and target its associated type Item. But a simple Vec
             // does not implement Iterator..
-            let (data_input, data_collection) =
-                scope.new_collection::<reasoning_service::encoder::EncodedTriple<u64>, _>();
+            let (data_input, data_collection) = scope.new_collection::<EncodedTriple<u64>, _>();
 
             let res_trace = reasoning_service::full_materialization::<_, Rc<String>, _>(
                 &data_collection,
@@ -116,17 +113,114 @@ fn dataflow_integration_test() {
             timer = std::time::Instant::now();
         }
 
-        /*reasoning_service::save_to_file_through_trace::<BiMapEncoder, _, _>(
-            "NOT_USED",
+        reasoning_service::save_to_file_through_trace::<BiMapEncoder, _, _>(
+            &map,
+            "output/full_materialization_simple_data.nt",
             &mut result_trace,
             1,
-        );*/
+        );
 
-        let result = reasoning_service::return_vector::<BiMapEncoder, _, _>(&mut result_trace, 1);
+        if index == 0 {
+            info!(
+                "Saving to file time [Full Materialization]: {}ms",
+                timer.elapsed().as_millis()
+            );
+        }
 
-        let translated = map.translate::<BiMapEncoder>(result);
+        // Addition Test
 
-        info!("{:#?}", translated);
+        let t_box_added = BiMapEncoder::insert_from_file(
+            "data/t_box_addition_test.nt",
+            &mut encoding_logic,
+            &mut map,
+            &mut parser,
+            Some(index),
+            Some(peers),
+        )
+        .unwrap();
+
+        let a_box_added = BiMapEncoder::insert_from_file(
+            "data/a_box_addition_test.nt",
+            &mut encoding_logic,
+            &mut map,
+            &mut parser,
+            Some(index),
+            Some(peers),
+        )
+        .unwrap();
+
+        reasoning_service::add_data::<BiMapEncoder, _, _>(
+            a_box_added,
+            &mut data_input,
+            t_box_added,
+            2,
+        );
+
+        while probe.less_than(data_input.time()) {
+            worker.step();
+        }
+
+        if index == 0 {
+            info!("Addition Update Time: {}ms", timer.elapsed().as_millis());
+            timer = std::time::Instant::now();
+        }
+
+        reasoning_service::save_to_file_through_trace::<BiMapEncoder, _, _>(
+            &map,
+            "output/addition_materializatiion_simple_data.nt",
+            &mut result_trace,
+            2,
+        );
+
+        if index == 0 {
+            info!(
+                "Saving to file time [Addition]: {}ms",
+                timer.elapsed().as_millis()
+            );
+            timer = std::time::Instant::now();
+        }
+
+        // Deletion Test:
+        // Is it true that only TBox deletion can trigger more tuples to be deleted?
+        // Although the data is removed the map retains the deleted triples and encoding.
+        let t_box_removed = BiMapEncoder::insert_from_file(
+            "data/t_box_deletion_test.nt",
+            &mut encoding_logic,
+            &mut map,
+            &mut parser,
+            Some(index),
+            Some(peers),
+        )
+        .unwrap();
+
+        reasoning_service::remove_data::<BiMapEncoder, _, _>(
+            vec![],
+            &mut data_input,
+            t_box_removed,
+            3,
+        );
+
+        while probe.less_than(data_input.time()) {
+            worker.step();
+        }
+
+        if index == 0 {
+            info!("Deletion Update Time: {}ms", timer.elapsed().as_millis());
+        }
+
+        reasoning_service::save_to_file_through_trace::<BiMapEncoder, _, _>(
+            &map,
+            "output/deletion_materializatiion_simple_data.nt",
+            &mut result_trace,
+            3,
+        );
+
+        if index == 0 {
+            info!(
+                "Saving to file time [Deletion]: {}ms",
+                timer.elapsed().as_millis()
+            );
+        }
     })
     .expect("Could not run timely dataflow correctly");
 }

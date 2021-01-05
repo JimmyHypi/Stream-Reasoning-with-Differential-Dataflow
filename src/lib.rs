@@ -4,6 +4,7 @@ extern crate lalrpop_util;
 
 /// Encoder module
 pub mod encoder;
+
 pub mod model;
 
 /*
@@ -166,8 +167,9 @@ use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Threshold;
 use differential_dataflow::Collection;
-use encoder::EncodedTriple;
 use timely::dataflow::Scope;
+
+type EncodedTriple<T> = (T, T, T);
 
 /// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
 // [IMPROVEMENT]:
@@ -785,8 +787,10 @@ pub fn remove_data<E, K, V>(
     data_input.flush();
 }
 
+use crate::encoder::Triple;
 /// Save the full materialization fo file
 pub fn save_to_file_through_trace<E, K, V>(
+    map: &E::MapStructure,
     path: &str,
     trace: &mut TraceAgent<
         OrdKeySpine<
@@ -800,25 +804,27 @@ pub fn save_to_file_through_trace<E, K, V>(
     E: Encoder<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
     <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
-        std::fmt::Debug + Clone + Ord + 'static,
+        std::fmt::Debug + Clone + Ord + 'static + Triple<V>,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
     V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Display,
 {
+    use crate::encoder::BiMapTrait;
     use differential_dataflow::trace::cursor::Cursor;
     use differential_dataflow::trace::TraceReader;
-    // use std::fs::OpenOptions;
-    // use std::io::Write;
+    use std::fs::OpenOptions;
+    use std::io::Write;
 
-    // let mut full_materialization_file = OpenOptions::new()
-    //     .read(true)
-    //     .write(true)
-    //     .truncate(true)
-    //     .create(true)
-    //     .open(path)
-    //     .expect("Something wrong happened with the ouput file");
+    let mut full_materialization_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)
+        // Instead of expecting return a Result<()>
+        .expect("Something wrong happened with the ouput file");
 
     if let Some((mut cursor, storage)) = trace.cursor_through(&[time]) {
         while let Some(key) = cursor.get_key(&storage) {
@@ -832,11 +838,17 @@ pub fn save_to_file_through_trace<E, K, V>(
                     }
                 });
                 if count > 0 {
-                    println!("{:?}", key);
+                    // println!("{:?}", key);
                     // key.print_easy_reading();
-                    // if let Err(e) = writeln!(full_materialization_file, "{}", key.to_string()) {
-                    //     eprintln!("Couldn't write to file: {}", e);
-                    // }
+                    // [IMPROVEMENT]:
+                    // Error handling instead of unwraps and expects!
+                    let s = map.get_left(key.s()).expect("Could not find the subject");
+                    let p = map.get_left(key.p()).expect("Could not find the property");
+                    let o = map.get_left(key.o()).expect("Could not find the object");
+                    if let Err(e) = writeln!(full_materialization_file, "<{}> <{}> <{}> .", s, p, o)
+                    {
+                        eprintln!("Couldn't write to file: {}", e);
+                    }
                 }
                 cursor.step_val(&storage);
             }
