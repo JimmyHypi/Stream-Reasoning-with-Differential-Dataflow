@@ -1,8 +1,94 @@
-use crate::encoder::{BiMapTrait, BijectiveMap, EncodingLogic, ParserTrait};
+use crate::encoder::{BiMapTrait, BijectiveMap, EncodingLogic, ParserTrait, Triple};
+use std::marker::PhantomData;
+use std::path::Path;
 
-type ParsedTriples<T> = Vec<(T, T, T)>;
-type ParsedTriple<T> = (T, T, T);
 type EncodedTriple<T> = (T, T, T);
+
+#[derive(Copy, Clone)]
+pub struct EncoderUnit<L, R, E, P, F>
+where
+    R: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync,
+    L: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync,
+    E: EncoderTrait<L, R>,
+    P: ParserTrait<L>,
+    F: EncodingLogic<L, R>,
+{
+    left_type: PhantomData<L>,
+    right_type: PhantomData<R>,
+    parser: P,
+    encoding_logic: F,
+    bijective_map: Option<E::MapStructure>,
+}
+
+impl<L, R, E, P, F> EncoderUnit<L, R, E, P, F>
+where
+    R: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync,
+    L: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync,
+    E: EncoderTrait<L, R>,
+    P: ParserTrait<L>,
+    F: EncodingLogic<L, R>,
+{
+    pub fn new(parser: P, encoding_logic: F) -> Self {
+        Self {
+            left_type: PhantomData,
+            right_type: PhantomData,
+            parser,
+            encoding_logic,
+            bijective_map: None,
+        }
+    }
+
+    pub fn encode<W: AsRef<Path>>(
+        &mut self,
+        file_path: W,
+        index: Option<usize>,
+        peers: Option<usize>,
+    ) -> E::EncodedDataSet {
+        if let None = self.bijective_map {
+            let (map, encoded_dataset) = E::load_from_file(
+                file_path,
+                &mut self.encoding_logic,
+                &mut self.parser,
+                index,
+                peers,
+            );
+            self.bijective_map = Some(map);
+            encoded_dataset
+        } else {
+            let encoded_dataset = E::insert_from_file(
+                file_path,
+                &mut self.encoding_logic,
+                &mut self.bijective_map.as_mut().unwrap(),
+                &mut self.parser,
+                index,
+                peers,
+            )
+            // [IMPROVEMENT]:
+            // Error handling here please!
+            .expect("Could not insert into map");
+
+            encoded_dataset
+        }
+    }
+
+    pub fn get_map(&self) -> &Option<E::MapStructure> {
+        &self.bijective_map
+    }
+
+    pub fn get_right_from_map(&mut self, left: L) -> &R {
+        match self.bijective_map.as_mut() {
+            Some(map) => map.get_right(&left).expect("Could not retrieve right"),
+            None => {
+                // [IMPROVEMENT]:
+                // Add logic maybe to create the map and add the encoding of the left value.
+                // This most likely requires the E::MapStructure to implement Default
+                // so one can add:
+                // self.bijective_map = E::MapStructure::default();
+                panic!("Map not initialized");
+            }
+        }
+    }
+}
 
 // [DESIGN CHOICE]:
 // The trait generalizes the data structure returned by the load function and NOT
@@ -12,13 +98,13 @@ type EncodedTriple<T> = (T, T, T);
 // [IMPROVEMENT]:
 // Consider making the EncodedDataSet bound by std::iter::Iterator so that you can use
 // <EncodedDataSet as std::iter::Iterator>::Item.. but vec does not implement Iterator..
-pub trait Encoder<K, V>
+pub trait EncoderTrait<K, V>
 where
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
     // Maps each string of type K to another type V
-    type MapStructure: BiMapTrait<K, V>;
+    type MapStructure: BiMapTrait<K, V> + Send + Sync;
     // Set of triples in the encoding domain
     type EncodedDataSet: IntoIterator;
 
@@ -41,15 +127,16 @@ where
     // [IMPROVEMENT]:
     // Making a trait for a type to which elements can be put in, we can bind Self::EncodedDataSet
     // to that trait and make this function implemented at trait level
-    fn insert_from_parser_output<F>(
+    fn insert_from_parser_output<F, P>(
         map: &mut Self::MapStructure,
-        parsed_triples: ParsedTriples<K>,
+        parsed_triples: Vec<P::TripleType>,
         encoding_logic: &mut F,
         index: Option<usize>,
         peers: Option<usize>,
     ) -> Result<Self::EncodedDataSet, (K, V)>
     where
-        F: EncodingLogic<K, V>;
+        F: EncodingLogic<K, V>,
+        P: ParserTrait<K>;
 
     // The lalrpop parser will always return a vector of parsed triples, so I am
     // it should be ok not to put a generic parameter for the filename type.
@@ -59,8 +146,9 @@ where
     // use the same map for different data sets (t-box and a-box). For this reason each of that
     // dataset will be passed in the vector in input and return separately. This seems weird
     // is there any better solution? This can even require to change the whole structure :/
-    fn load_from_parser_output<F>(
-        parsed_triples: Vec<ParsedTriples<K>>,
+    // The map contains a Insert function. We can use that. But this works just fine
+    fn load_from_parser_output<F, P>(
+        parsed_triples: Vec<Vec<P::TripleType>>,
         encoding_logic: &mut F,
         index: Option<usize>,
         peers: Option<usize>,
@@ -69,10 +157,11 @@ where
         // that.
     ) -> (Self::MapStructure, Vec<Self::EncodedDataSet>)
     where
-        F: EncodingLogic<K, V>;
+        F: EncodingLogic<K, V>,
+        P: ParserTrait<K>;
 
-    fn insert_from_file<F, P>(
-        file_name: &str,
+    fn insert_from_file<F, P, W: AsRef<Path>>(
+        file_name: W,
         encoding_logic: &mut F,
         map: &mut Self::MapStructure,
         parser: &mut P,
@@ -84,11 +173,11 @@ where
         P: ParserTrait<K>,
     {
         let parsed_triples = Self::parse(file_name, parser);
-        Self::insert_from_parser_output(map, parsed_triples, encoding_logic, index, peers)
+        Self::insert_from_parser_output::<_, P>(map, parsed_triples, encoding_logic, index, peers)
     }
 
-    fn load_from_file<F, P>(
-        file_name: &str,
+    fn load_from_file<F, P, W: AsRef<Path>>(
+        file_name: W,
         encoding_logic: &mut F,
         parser: &mut P,
         index: Option<usize>,
@@ -100,7 +189,7 @@ where
     {
         let parsed_triples = vec![Self::parse(file_name, parser)];
         let (map, mut vec) =
-            Self::load_from_parser_output(parsed_triples, encoding_logic, index, peers);
+            Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers);
         assert_eq!(vec.len(), 1);
         let only_vec = vec
             .pop()
@@ -108,8 +197,8 @@ where
         (map, only_vec)
     }
 
-    fn load_from_multiple_files_same_encoded_dataset<F, P>(
-        file_names: &[&str],
+    fn load_from_multiple_files_same_encoded_dataset<F, P, W: AsRef<Path>>(
+        file_names: &[W],
         encoding_logic: &mut F,
         parser: &mut P,
         index: Option<usize>,
@@ -123,8 +212,12 @@ where
         for file_name in file_names {
             parsed_triples.append(&mut Self::parse(file_name, parser));
         }
-        let (map, mut vec) =
-            Self::load_from_parser_output(vec![parsed_triples], encoding_logic, index, peers);
+        let (map, mut vec) = Self::load_from_parser_output::<_, P>(
+            vec![parsed_triples],
+            encoding_logic,
+            index,
+            peers,
+        );
         assert_eq!(vec.len(), 1);
         let only_vec = vec
             .pop()
@@ -132,8 +225,8 @@ where
         (map, only_vec)
     }
 
-    fn load_from_multiple_files_different_encoded_dataset<F, P>(
-        file_names: &[&str],
+    fn load_from_multiple_files_different_encoded_dataset<F, P, W: AsRef<Path>>(
+        file_names: &[W],
         encoding_logic: &mut F,
         parser: &mut P,
         index: Option<usize>,
@@ -147,17 +240,20 @@ where
         for file_name in file_names {
             parsed_triples.push(Self::parse(file_name, parser));
         }
-        Self::load_from_parser_output(parsed_triples, encoding_logic, index, peers)
+        Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers)
     }
 
     // [IMPROVEMENT]:
     // The return type seems like it should always be a (String, String, String)
     // because that's what the parser generator returns.
-    fn parse<P: ParserTrait<K>>(file_name: &str, parser: &mut P) -> Vec<ParsedTriple<K>> {
+    fn parse<P: ParserTrait<K>, W: AsRef<Path>>(
+        file_name: W,
+        parser: &mut P,
+    ) -> Vec<P::TripleType> {
         // [IMPROVEMENT]:
         // 1) Storing all the data in one big string seems a little meh.
         //    What if the data is REALLY big? We need some sort of caching or reading chunks
-        //    from file. Look into this.
+        //    from file. Look into this. Use a BufReader
         // 2) Error handling. Instead of returning a Vec<..> throw a result using the ? op.
         //    This require to define my own error and convert all of this errors into that new
         //    one. Turn the expects into a type of error.
@@ -175,23 +271,25 @@ where
 // Example Implementation:
 
 use bimap::BiMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 // This specializes encoding data structure
 pub struct BiMapEncoder {}
 
-impl Encoder<Rc<String>, u64> for BiMapEncoder {
-    type MapStructure = BijectiveMap<Rc<String>, u64>;
+impl EncoderTrait<Arc<String>, u64> for BiMapEncoder {
+    type MapStructure = BijectiveMap<Arc<String>, u64>;
     type EncodedDataSet = Vec<EncodedTriple<u64>>;
 
-    fn load_from_parser_output<F>(
-        parsed_triples: Vec<ParsedTriples<Rc<String>>>,
+    fn load_from_parser_output<F, P>(
+        parsed_triples: Vec<Vec<P::TripleType>>,
         encoding_fn: &mut F,
         _index: Option<usize>,
         _peers: Option<usize>,
     ) -> (Self::MapStructure, Vec<Self::EncodedDataSet>)
     where
-        F: EncodingLogic<Rc<String>, u64>,
+        F: EncodingLogic<Arc<String>, u64>,
+        P: ParserTrait<Arc<String>>,
+        P::TripleType: Triple<Arc<String>>,
     {
         let mut bimap = BiMap::new();
         let mut resulting_vec = vec![];
@@ -203,7 +301,7 @@ impl Encoder<Rc<String>, u64> for BiMapEncoder {
                 // Consider using String interning to retrieve Strings. In this way comparison
                 // would be constant with respect to the String length as the references would
                 // be compared.
-                let (s, p, o) = triple;
+                let (s, p, o) = (triple.s(), triple.p(), triple.o());
                 let s_encoded = encoding_fn.encode(s.clone());
                 let p_encoded = encoding_fn.encode(p.clone());
                 let o_encoded = encoding_fn.encode(o.clone());
@@ -237,19 +335,22 @@ impl Encoder<Rc<String>, u64> for BiMapEncoder {
         (BijectiveMap::new(bimap), resulting_vec)
     }
 
-    fn insert_from_parser_output<F>(
+    fn insert_from_parser_output<F, P>(
         map: &mut Self::MapStructure,
-        parsed_triples: ParsedTriples<Rc<String>>,
+        parsed_triples: Vec<P::TripleType>,
         encoding_logic: &mut F,
         _index: Option<usize>,
         _peers: Option<usize>,
-    ) -> Result<Self::EncodedDataSet, (Rc<String>, u64)>
+    ) -> Result<Self::EncodedDataSet, (Arc<String>, u64)>
     where
-        F: EncodingLogic<Rc<String>, u64>,
+        F: EncodingLogic<Arc<String>, u64>,
+        P: ParserTrait<Arc<String>>,
     {
         let mut resulting_vec = vec![];
         for triple in parsed_triples {
-            let (s, p, o) = triple;
+            // [WARNING]:
+            // Is cloning a &Rc the same as cloning the Rc?
+            let (s, p, o) = (triple.s(), triple.p(), triple.o());
             let mut triple = (0, 0, 0);
 
             if let Some(idx) = map.get_right(&s) {

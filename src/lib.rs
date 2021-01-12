@@ -2,711 +2,347 @@
 #[macro_use]
 extern crate lalrpop_util;
 
+use crate::encoder::BiMapTrait;
+use differential_dataflow::input::{Input, InputSession};
+use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::implementations::ord::OrdKeySpine;
+use differential_dataflow::trace::{cursor::Cursor, TraceReader};
+use differential_dataflow::{Collection, ExchangeData};
+use log::info;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+use structopt::StructOpt;
+use timely::communication::allocator::generic::Generic;
+use timely::dataflow::scopes::child::Child;
+use timely::dataflow::ProbeHandle;
+use timely::order::PartialOrder;
+use timely::worker::Worker;
+
 /// Encoder module
 pub mod encoder;
+use encoder::EncoderTrait;
+use encoder::EncoderUnit;
+use encoder::EncodingLogic;
+use encoder::ParserTrait;
+use encoder::Triple;
 
 pub mod model;
 
-/*
-/// Assumptions:
-///     - No repeated value in the A_Box
-///     - Data uses only ASCII characters, but IRIs may contain more
-/// function to load the data, parallelized with respect to the number of workers.
-/// At this point of the work multiple workers are not considered because the logic to shuffle the data
-/// is not trivial at all
-pub fn load_data_scrub(filename: &str, index: usize, peers: usize) -> Vec<model::Triple> {
-    use std::io::BufRead;
+fn parse_key_val<T, U, V>(s: &str) -> Result<(T, U, V), Box<dyn std::error::Error>>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + 'static,
+    U: std::str::FromStr,
+    U::Err: std::error::Error + 'static,
+    V: std::str::FromStr,
+    V::Err: std::error::Error + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("Invalid Path=Mode-Type: no `=` found in `{}`", s))?;
+    let second_part = &s[pos + 1..];
+    let p = second_part
+        .find('_')
+        .ok_or_else(|| format!("Invalid Path=Mode-Type: no `_` found in {}", s))?;
+    Ok((
+        s[..pos].parse()?,
+        s[pos + 1..pos + p + 1].parse()?,
+        s[pos + p + 2..].parse()?,
+    ))
+}
 
-    let mut returning_data = Vec::new();
-    let file = BufReader::new(File::open(filename).expect("Couldn't open file"));
-    let triples = file.lines();
+#[derive(StructOpt, Debug)]
+pub struct Args {
+    #[structopt(parse(from_os_str))]
+    t_box_path: std::path::PathBuf,
+    #[structopt(parse(from_os_str))]
+    a_box_path: std::path::PathBuf,
+    #[structopt(parse(from_os_str))]
+    output_folder: std::path::PathBuf,
+    #[structopt(
+        name = "UPDATE",
+        short = "u",
+        long = "update",
+        parse(try_from_str = parse_key_val),
+        number_of_values = 1,
+    )]
+    incremental_file_paths: Vec<(std::path::PathBuf, IncrementalMode, IncrementalType)>,
+}
 
-    // We use enumerate to parallelize the loading of the data
-    for (count, read_triple) in triples.enumerate() {
-        if index == count % peers {
-            if let Ok(triple) = read_triple {
-                let v: Vec<String> = triple.split(" ").map(|x| String::from(x)).collect();
-                let triple_to_push = model::Triple {
-                    // TODO: THESE CLONES, MEH
-                    subject: v[0].clone(),
-                    predicate: v[1].clone(),
-                    object: v[2].clone(),
-                };
-                returning_data.push(triple_to_push);
-            } else {
-                // TODO
-            }
+#[derive(Debug)]
+enum IncrementalMode {
+    Addition,
+    Deletion,
+}
+#[derive(Debug)]
+enum IncrementalType {
+    ABox,
+    TBox,
+}
+// [IMPROVEMENT]:
+// Error Handling.
+// This should go in its own module
+#[derive(Debug)]
+struct ParseModeError {
+    string: String,
+}
+
+impl From<String> for ParseModeError {
+    fn from(s: String) -> Self {
+        ParseModeError { string: s }
+    }
+}
+
+impl std::fmt::Display for ParseModeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}", self.string)
+    }
+}
+
+impl std::error::Error for ParseModeError {}
+
+impl std::str::FromStr for IncrementalMode {
+    // [IMPROVEMENT]:
+    // Error Handling here!
+    type Err = ParseModeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lc = s.to_lowercase();
+        if lc == "i" || lc == "insert" || lc == "insertion" {
+            Ok(IncrementalMode::Addition)
+        } else if lc == "d" || lc == "delete" || lc == "deletion" {
+            Ok(IncrementalMode::Deletion)
+        } else {
+            Err(format!("{} is not a correct mode [insert / deletion].", s).into())
         }
     }
-
-    returning_data
 }
-*/
 
-/*
+impl std::str::FromStr for IncrementalType {
+    // [IMPROVEMENT]:
+    // Error Handling here!
+    type Err = ParseModeError;
 
-use std::collections::HashSet;
-/// loads the ontology which has already been preprocessed using apache Jena
-/// the ASSUMPTION that I'm making here is that the ontology will never be
-/// to large. It returns a set so that we will not consider duplicate that
-/// apache Jena generates when reasoning
-pub fn load_ontology(filename: &str) -> HashSet<crate::model::Triple>{
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lc = s.to_lowercase();
+        if lc == "t" || lc == "t_box" || lc == "tbox" {
+            Ok(IncrementalType::TBox)
+        } else if lc == "a" || lc == "a_box" || lc == "abox" {
+            Ok(IncrementalType::ABox)
+        } else {
+            Err(format!("{} is not a correct mode [insert / deletion].", s).into())
+        }
+    }
+}
+pub fn run_materialization<L, R, E, P, F, M>(
+    encoder: Arc<Mutex<EncoderUnit<L, R, E, P, F>>>,
+    materialization: M,
+) -> Result<(), String>
+where
+    // [IMPROVEMENT]:
+    // The timely dataflow constraint require all of the components that get passed from
+    // worker to worker to be 'static because we don't want the closure to outlive
+    // the variable.. Is there another way around?
+    R: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static + Clone + Copy,
+    L: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + std::fmt::Display + Send + Sync + 'static,
+    E: EncoderTrait<L, R> + 'static,
+    <E::EncodedDataSet as IntoIterator>::Item: ExchangeData
+        + Triple<R>
+        + Ord
+        + std::fmt::Debug
+        + Clone
+        + Copy
+        + differential_dataflow::hashable::Hashable,
+    P: ParserTrait<L> + 'static,
+    F: EncodingLogic<L, R> + 'static,
+    // [IMPROVEMENT]:
+    // The dataflow timestamp is a usize, should it be anything else?
+    M: Fn(
+            &Collection<
+                Child<'_, Worker<Generic>, usize>,
+                <E::EncodedDataSet as IntoIterator>::Item,
+            >,
+            &mut ProbeHandle<usize>,
+        )
+            -> TraceAgent<OrdKeySpine<<E::EncodedDataSet as IntoIterator>::Item, usize, isize>>
+        + Send
+        + Sync
+        + 'static,
+{
+    let args = Arc::new(Mutex::new(Args::from_args()));
+    // The 4 is
+    // 1) name of the program to be run
+    // 2) t_box_path
+    // 3) a_box_path
+    // 4) output_folder
+    // The *2 comes from the fact that a parameter has the specifier -u and the path
+    let number_of_args = 4 + args.lock().unwrap().incremental_file_paths.len() * 2;
+    timely::execute_from_args(std::env::args().skip(number_of_args), move |worker| {
+        let mut timer = worker.timer();
+        let index = worker.index();
+        let peers = worker.peers();
 
-    let file = File::open(filename).expect("couldn't open file");
-    let reader = BufReader::new(file);
-    let mut res: HashSet<crate::model::Triple> = HashSet::new();
-    // Here I'm using the parser already present in crate.io, so I can really
-    // parallelize the reading, and I don't even think it is worth it,
-    // because (even in the paper) we assume that schema type triples are
-    // always going to be in a small number, which imho makes sense,
-    // as it is a TBOX
-    RdfXmlParser::new(reader, "").unwrap().parse_all(&mut |t| {
-        // IMPORTANT: THIS CHECK IS TO AVOID CONSIDERING THE FACT THAT
-        // A CLASS OR PROPERTY IS SUBCLASSOF OR SUBPROPERTYOF ITSELF
-        if t.subject.to_string() != t.object.to_string() {
-            res.insert(
-                crate::model::Triple{
-                    // Clones sucks, but is this going to be a bottleneck?
-                    // At the end of the day, this is going to be performed
-                    // n times, where n is the number of triples in the ontology
-                    subject: t.subject.to_string().clone(),
-                    predicate: t.predicate.to_string().clone(),
-                    object: t.object.to_string().clone(),
-                }
+        let mut probe = timely::dataflow::ProbeHandle::new();
+        // VERY IMPORTANT:
+        // TBox data needs to be inserted by EACH WORKER, hence we don't pass the
+        // index and the peers to parallelize the computation.
+        let t_data =
+            encoder
+                .lock()
+                .unwrap()
+                .encode(args.lock().unwrap().t_box_path.as_path(), None, None);
+        let a_data = encoder.lock().unwrap().encode(
+            args.lock().unwrap().a_box_path.as_path(),
+            Some(index),
+            Some(peers),
+        );
+        // [IMPROVEMENT]:
+        // Here we are considering only the worker with index 0.. maybe an averatge among all the
+        // workers?
+        if index == 0 {
+            info!("Load time: {}μs", timer.elapsed().as_micros());
+            timer = std::time::Instant::now();
+        }
+
+        let (mut data_input, mut result_trace) = worker.dataflow::<usize, _, _>(|scope| {
+            let (data_input, data_collection) =
+                scope.new_collection::<<E::EncodedDataSet as IntoIterator>::Item, _>();
+            let res_trace = materialization(&data_collection, &mut probe);
+            (data_input, res_trace)
+        });
+
+        insert_starting_data::<E, _, _>(a_data, &mut data_input, t_data);
+
+        while probe.less_than(data_input.time()) {
+            worker.step();
+        }
+
+        if index == 0 {
+            info!(
+                "Full Materialization time: {}μs",
+                timer.elapsed().as_micros()
             );
         }
-        Ok(()) as Result<(), RdfXmlError>
-    }).expect("something wrong with the parser");
 
-    res
-}
+        args.lock()
+            .unwrap()
+            .output_folder
+            .push("full_materialization.nt");
+        let mut locked = args.lock().unwrap();
+        let output_path = locked.output_folder.as_path();
 
-/// Assumption: The load rules function works only for the ruleset
-/// we expect in our application
-/// parses the rules and returs them as a Vector
-pub fn load_rules(filename: &str) -> Vec::<model::CustomRule> {
-    use std::io::BufRead;
+        save_to_file_through_trace::<E, _, _, _>(
+            &encoder.lock().unwrap().get_map().as_ref().unwrap(),
+            output_path,
+            &mut result_trace,
+            1,
+        );
+        // Restore path
+        locked.output_folder.pop();
 
-    let mut returning_data = Vec::new();
-    let file = BufReader::new(File::open(filename).expect("Couldn't open file"));
-    let rules = file.lines();
-
-    for rule in rules {
-        if let Ok(r) = rule {
-            let cut_off = r.find(":").expect("Could not find the cut off between head and rules: check the syntax of the rules");
-            let head_substring = String::from(&r[.. cut_off-1]);
-            let body_substring = String::from(&r[cut_off+3 ..]);
-
-            // println!("\n\nRule: {}\nHead: {}\nBody: {}\n", r, head_substring, body_substring);
-            let body_literals_as_str: Vec::<&str> = body_substring.split(',').collect();
-            // for (count, literal) in body_literals_as_str.iter().enumerate() {
-            //     println!("BodyLiteral {}: {}", count, literal);
-            // }
-            let parameters_list = String::from(&head_substring[1..head_substring.len()-1]);
-            let head_terms: Vec<&str> = parameters_list.split_whitespace().collect();
-            let head_literal = build_literal(head_terms);
-
-            let parameters_list1 = String::from(&(body_literals_as_str[0])[1..body_literals_as_str[0].len()-1]);
-            let literal_terms1: Vec<&str> = parameters_list1.split_whitespace().collect();
-            let parameters_list2 = String::from(&(body_literals_as_str[1])[1..body_literals_as_str[1].len()-1]);
-            let literal_terms2: Vec<&str> = parameters_list2.split_whitespace().collect();
-            let body_literals: [model::CustomLiteral; 2] = [build_literal(literal_terms1), build_literal(literal_terms2)];
-
-            let rule_to_be_pushed = build_rule(head_literal, body_literals);
-            returning_data.push(rule_to_be_pushed);
-        } else {
-            // TODO
+        if index == 0 {
+            info!(
+                "Saving to file time [Full Materialization]: {}μs",
+                timer.elapsed().as_micros(),
+            );
         }
-    }
-
-    returning_data
-}
-
-fn build_literal(params: Vec::<&str>) -> model::CustomLiteral {
-
-    let first_param: model::PossibleTerm = model::PossibleTerm::LiteralVariable(String::from(&(params[0])[1..]));
-    let second_param: model::PossibleTerm = {
-        if "?" == &(params[1])[0..1] {
-            // In this case it is a variable
-            let var_name = &(params[1])[1..];
-            model::PossibleTerm::LiteralVariable(String::from(var_name))
-        } else {
-            // In this case it is a word in RhoDF
-            match params[1] {
-                "SCO"    => model::PossibleTerm::RhoDFProperty(model::RhoDFWord::SCO),
-                "SPO"    => model::PossibleTerm::RhoDFProperty(model::RhoDFWord::SPO),
-                "TYPE"   => model::PossibleTerm::RhoDFProperty(model::RhoDFWord::TYPE),
-                "DOMAIN" => model::PossibleTerm::RhoDFProperty(model::RhoDFWord::DOMAIN),
-                "RANGE"  => model::PossibleTerm::RhoDFProperty(model::RhoDFWord::RANGE),
-                _ => {
-                    // In all other cases we have constant values but in our rules
-                    // we have no constant values so let's just panic for now
-                    panic!("malformed ruleset");
+        // There is a `big` limit here. Dataflow Computation works great for applications where
+        // all the data are the same. S(ame)IMD, sort of speaking. In our case we have T-Box triples that are different
+        // from A-Bpx triples as each worker requires it. The current solution inserts all the
+        // t-box triples for each worker. In cases where the TBox is really big this can
+        // definitely be inefficient as the performance impact from multithreading is basically
+        // very little. If only a_box is inserted than there should be no problem, I remember this
+        // being an assumption that we made but DynamiTE doesn't really consider it.
+        // [IMPROVEMENT]
+        // What about a data structure shared by all the workers where all the t-box triples are
+        // stored only once?
+        for (i, (path, mode, t)) in locked.incremental_file_paths.iter().enumerate() {
+            let data = match t {
+                IncrementalType::TBox => encoder.lock().unwrap().encode(path.as_path(), None, None),
+                IncrementalType::ABox => {
+                    encoder
+                        .lock()
+                        .unwrap()
+                        .encode(path.as_path(), Some(index), Some(peers))
                 }
+            };
+            // [IMPROVEMENT]:
+            // Here we are considering only the worker with index 0.. maybe an averatge among all the
+            // workers?
+            if index == 0 {
+                info!(
+                    "Update #{} Load time: {}μs",
+                    i + 1,
+                    timer.elapsed().as_micros()
+                );
+                timer = std::time::Instant::now();
+            }
+
+            info!("Performing Update #{}. [{:?}, {:?}]", i + 1, mode, t);
+
+            match mode {
+                IncrementalMode::Addition => add_data::<E, _, _>(data, &mut data_input, 2 + i),
+                IncrementalMode::Deletion => remove_data::<E, _, _>(data, &mut data_input, 2 + i),
+            }
+
+            while probe.less_than(data_input.time()) {
+                worker.step();
+            }
+
+            if index == 0 {
+                info!(
+                    "Update #{} Update Time: {}μs",
+                    i + 1,
+                    timer.elapsed().as_micros()
+                );
+                timer = std::time::Instant::now();
+            }
+
+            let mut path = locked.output_folder.clone();
+            path.push(&format!("incremental_materialization_{}.nt", i + 1)[..]);
+
+            save_to_file_through_trace::<E, _, _, _>(
+                &encoder.lock().unwrap().get_map().as_ref().unwrap(),
+                path,
+                &mut result_trace,
+                2 + i,
+            );
+
+            if index == 0 {
+                info!(
+                    "Update #{} Save to File Time: {}μs",
+                    i + 1,
+                    timer.elapsed().as_micros()
+                );
+                timer = std::time::Instant::now();
             }
         }
-    };
-    let third_param: model::PossibleTerm = model::PossibleTerm::LiteralVariable(String::from(&(params[2])[1..]));
+    })?;
 
-    model::CustomLiteral{
-        tuple_of_terms: [first_param, second_param, third_param],
-    }
-}
-// Only works for rules with one literal in the head
-fn build_rule(head_literal: model::CustomLiteral, body_literals: [model::CustomLiteral; 2]) -> model::CustomRule {
-    model::CustomRule{
-        head: head_literal,
-        body: body_literals,
-    }
+    Ok(())
 }
 
-*/
-
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::iterate::Iterate;
-use differential_dataflow::operators::join::Join;
-use differential_dataflow::operators::reduce::Threshold;
-use differential_dataflow::Collection;
-use timely::dataflow::Scope;
-
-type EncodedTriple<T> = (T, T, T);
-
-/// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
-// [IMPROVEMENT]:
-// The current implementation of the function passes the translated value of S_C_O. My original
-// idea was to pass parameter:
-//      map: E::MapStructure,
-// that as defined in the encoder module implements the BiMapTrait.
-// This allows the filter operator to contain something like:
-//      let v = if let Some(v) = map.get_right(&String::from(&model::S_C_O)) {
-//          v
-//      } else {
-//          panic!("Throw error here");
-//      };
-//      triple.1 == v
-// But this messes up all the lifetime as we would be required to pass the E::MapStructure inside
-// the filter closure. This creates an odd error that I don't fully comprehend. Uncomment the next
-// rule_1 function. To see the error and the overall situation.
-// Passing the sco_value as a V would make the trait BiMapTrait useless..
-
-pub fn rule_1<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    sco_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let sco_transitive_closure =
-        data_collection
-            //.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
-            .filter(move |triple| triple.1 == sco_value )
-            .iterate(|inner| {
-
-                inner
-                    .map(|triple| (triple.2, (triple.0, triple.1)))
-                    .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
-                    .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))|
-                        (subj1, pred1, obj2)
-                    )
-                    .concat(&inner)
-                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
-
-            })
-            //.inspect(|x| println!("AFTER_RULE_1: {:?}", x))
-        ;
-
-    sco_transitive_closure
-}
-
-/*
-/// First rule: T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
-pub fn rule_1<G, E, K, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    map: E::MapStructure,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    E: Encoder<K, V>,
-    V: std::cmp::Eq
-        + std::hash::Hash
-        + Clone
-        + differential_dataflow::ExchangeData
-    K: std::cmp::Eq + std::hash::Hash + From<&'static str> + timely::Data,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let sco_transitive_closure =
-        data_collection
-            //.filter(|triple| triple.predicate == model::RDFS_SUB_CLASS_OF)
-            .filter(|triple| {
-                let value =
-                if let Some(v) = map.get_right(&K::from(model::RDFS_SUB_CLASS_OF)) {
-                    v
-                } else {
-                    panic!("COULD NOT RETRIEVE CONSTNT SUBCLASSOF FROM TABLE");
-                };
-                &triple.1 == value
-            })
-            .iterate(|inner| {
-
-                inner
-                    .map(|triple| (triple.2, (triple.0, triple.1)))
-                    .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
-                    .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))|
-                        (subj1, pred1, obj2)
-                    )
-                    .concat(&inner)
-                    .threshold(|_,c| { if c > &0 { 1 } else if c < &0 { -1 } else { 0 } })
-
-            })
-            //.inspect(|x| println!("AFTER_RULE_1: {:?}", x))
-
-        ;
-
-    sco_transitive_closure
-}
-*/
-
-/// Second rule: T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
-pub fn rule_2<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    spo_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let spo_transitive_closure = data_collection
-        .filter(move |triple| triple.1 == spo_value)
-        .iterate(|inner| {
-            inner
-                .map(|triple| (triple.2, (triple.0, triple.1)))
-                .join(&inner.map(|triple| (triple.0, (triple.1, triple.2))))
-                .map(|(_obj, ((subj1, pred1), (_pred2, obj2)))| (subj1, pred1, obj2))
-                .concat(&inner)
-                .threshold(|_, c| {
-                    if c > &0 {
-                        1
-                    } else if c < &0 {
-                        -1
-                    } else {
-                        0
-                    }
-                })
-        });
-
-    spo_transitive_closure
-}
-
-/// Third rule: T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
-pub fn rule_3<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    type_value: V,
-    sco_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let sco_only = data_collection.filter(move |triple| triple.1 == sco_value);
-
-    let candidates = data_collection
-        .filter(move |triple| triple.1 == type_value)
-        .map(|triple| (triple.2.clone(), (triple)))
-        .join(&sco_only.map(|triple| (triple.0, ())))
-        .map(|(_key, (triple, ()))| triple);
-
-    let sco_type_rule = candidates.iterate(|inner| {
-        let sco_only_in = sco_only.enter(&inner.scope());
-
-        inner
-            .map(|triple| (triple.2, (triple.0, triple.1)))
-            .join(&sco_only_in.map(|triple| (triple.0, (triple.1, triple.2))))
-            .map(|(_key, ((x, typ), (_sco, b)))| (x, typ, b))
-            .concat(&inner)
-            .threshold(|_, c| {
-                if c > &0 {
-                    1
-                } else if c < &0 {
-                    -1
-                } else {
-                    0
-                }
-            })
-    });
-
-    sco_type_rule
-}
-
-/// Fourth rule: T(x, p, b) <= T(p1, SPO, p),T(x, p1, y)
-pub fn rule_4<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    spo_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    // Select only the triples whose predicate participates in a SPO triple
-    let spo_only_out = data_collection.filter(move |triple| triple.1 == spo_value);
-
-    let candidates = data_collection
-        .map(|triple| ((triple.1.clone()), triple))
-        .join(&spo_only_out.map(|triple| ((triple.0), ())))
-        .map(|(_, (triple, ()))| triple);
-
-    let spo_type_rule = candidates.iterate(|inner| {
-        let spo_only = spo_only_out.enter(&inner.scope());
-        inner
-            .map(|triple| (triple.1, (triple.0, triple.2)))
-            .join(&spo_only.map(|triple| (triple.0, (triple.1, triple.2))))
-            .map(|(_key, ((x, y), (_spo, p)))| (x, p, y))
-            .concat(&inner)
-            .threshold(|_, c| {
-                if c > &0 {
-                    1
-                } else if c < &0 {
-                    -1
-                } else {
-                    0
-                }
-            })
-    });
-    spo_type_rule
-}
-
-/// Fifth rule: T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
-pub fn rule_5<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    domain_value: V,
-    type_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let only_domain = data_collection.filter(move |triple| triple.1 == domain_value);
-
-    let candidates = data_collection
-        .map(|triple| ((triple.1.clone()), triple))
-        .join(&only_domain.map(|triple| (triple.0, ())))
-        .map(|(_, (triple, ()))| triple);
-
-    // This does not require a iterative dataflow, the rule does not produce
-    // terms that are used by the rule itself
-    let domain_type_rule = candidates
-        .map(|triple| (triple.1, (triple.0, triple.2)))
-        .join(&only_domain.map(|triple| (triple.0, (triple.1, triple.2))))
-        .map(move |(_key, ((a, _b), (_dom, d)))| (a, type_value, d));
-
-    domain_type_rule
-}
-
-/// Sixth rule: T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
-pub fn rule_6<G, V>(
-    data_collection: &Collection<G, EncodedTriple<V>>,
-    range_value: V,
-    type_value: V,
-) -> Collection<G, EncodedTriple<V>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    let only_range = data_collection.filter(move |triple| triple.1 == range_value);
-
-    let candidates = data_collection
-        .map(|triple| ((triple.1.clone()), triple))
-        .join(&only_range.map(|triple| (triple.0, ())))
-        .map(|(_, (triple, ()))| triple);
-
-    // This does not require a iterative dataflow, the rule does not produce
-    // terms that are used by the rule itself
-    let domain_type_rule = candidates
-        .map(|triple| (triple.1, (triple.0, triple.2)))
-        .join(&only_range.map(|triple| (triple.0, (triple.1, triple.2))))
-        .map(move |(_key, ((_a, b), (_ran, r)))| (b, type_value, r));
-
-    domain_type_rule
-}
-
-use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::OrdKeySpine;
-use timely::dataflow::operators::probe::Probe;
-use timely::dataflow::ProbeHandle;
-
-/// Computes the full materialization of the collection
-pub fn full_materialization<G, K, V>(
-    data_input: &Collection<G, EncodedTriple<V>>,
-    mut probe: &mut ProbeHandle<G::Timestamp>,
-    // Contract:
-    // rdfs_keywords[0] = sub_class_of
-    // rdfs_keywords[1] = sub_property_of
-    // rdfs_keywords[2] = sub_type
-    // rdfs_keywords[3] = sub_domain
-    // rdfs_keywords[4] = sub_range
-    // [IMPROVEMENT]:
-    // Maybe an HashMap here? Seems overkill still
-    rdfs_keywords: &[V; 5],
-) -> TraceAgent<OrdKeySpine<EncodedTriple<V>, G::Timestamp, isize>>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-    V: std::cmp::Eq + std::hash::Hash + Clone + Copy + differential_dataflow::ExchangeData,
-    K: std::cmp::Eq + std::hash::Hash + timely::Data,
-    EncodedTriple<V>: timely::Data + Ord + std::fmt::Debug,
-{
-    // ASSUMPTION: WE ARE HARDCODING THE RULES IN HERE
-    // We only have two kinds of rules:
-    // the ones that deal with only the T_box:
-    // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)
-    // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)
-    // the ones that deal with both the a_box and the t_box
-    // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)
-    // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)
-    // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)
-    // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)
-
-    // Orders matters, to guarantee a correct execution of the materialization:
-    // T(a, SCO, c) <= T(a, SCO, b),T(b, SCO, c)        -- rule_1
-    // T(a, SPO, c) <= T(a, SPO, b),T(b, SPO, c)        -- rule_2
-    // T(x, p, y) <= T(p1, SPO, p),T(x, p1, y)          -- rule_4
-    // T(a, TYPE, D) <= T(p, DOMAIN, D),T(a, p, b)      -- rule_5
-    // T(b, TYPE, R) <= T(p, RANGE, R),T(a, p, b)       -- rule_6
-    // T(x, TYPE, b) <= T(a, SCO, b),T(x, TYPE, a)      -- rule_3
-    // as we can see there is no rule with a literal in the body that
-    // corresponds to a literal in the head of any subsequent rule
-
-    let sco_transitive_closure = rule_1(&data_input, rdfs_keywords[0]);
-
-    let spo_transitive_closure = rule_2(&data_input, rdfs_keywords[1]);
-
-    let data_input = data_input
-        .concat(&sco_transitive_closure)
-        .concat(&spo_transitive_closure)
-        //  VERY IMPORTANT: THE DISTINCT PUTS THE REMOVAL INTO ADDITION
-        // SO WE REWRITE THE DISTINCT TO KEEP THE REMOVAL -1
-        // .distinct()
-        .threshold(|_, c| {
-            if c > &0 {
-                1
-            } else if c < &0 {
-                -1
-            } else {
-                0
-            }
-        });
-
-    let spo_type_rule = rule_4(&data_input, rdfs_keywords[1]);
-
-    let data_input = data_input
-        .concat(&spo_type_rule)
-        // .distinct()
-        .threshold(|_, c| {
-            if c > &0 {
-                1
-            } else if c < &0 {
-                -1
-            } else {
-                0
-            }
-        });
-
-    let domain_type_rule = rule_5(&data_input, rdfs_keywords[3], rdfs_keywords[2]);
-
-    // We don't need this, but still :P
-    let data_input = data_input
-        .concat(&domain_type_rule)
-        // .distinct()
-        .threshold(|_, c| {
-            if c > &0 {
-                1
-            } else if c < &0 {
-                -1
-            } else {
-                0
-            }
-        });
-
-    let range_type_rule = rule_6(&data_input, rdfs_keywords[4], rdfs_keywords[2]);
-
-    let data_input = data_input
-        .concat(&range_type_rule)
-        // .distinct()
-        .threshold(|_, c| {
-            if c > &0 {
-                1
-            } else if c < &0 {
-                -1
-            } else {
-                0
-            }
-        });
-
-    let sco_type_rule = rule_3(&data_input, rdfs_keywords[2], rdfs_keywords[0]);
-
-    let data_input = data_input
-        .concat(&sco_type_rule)
-        // .distinct()
-        .threshold(|_, c| {
-            if c > &0 {
-                1
-            } else if c < &0 {
-                -1
-            } else {
-                0
-            }
-        });
-
-    let arrangement = data_input
-        // .inspect(|triple| (triple.0).print_easy_reading())
-        // .inspect(|triple| println!("{:?}", triple))
-        // .inspect(|x| println!("{:?}", x))
-        .arrange_by_self();
-
-    arrangement.stream.probe_with(&mut probe);
-
-    arrangement.trace
-}
-
-/*
-use differential_dataflow::input::InputSession;
-/// Sets up the data for to use for the full materialization
-/// Here some preprocessing is required, we hav to eliminate all the owl tags and change the "terminological type" to distinguish it from the axiomatic one
-pub fn load_lubm_data(
-    a_box_filename: &str,
-    t_box_filename: &str,
-    index: usize,
-    peers: usize,
-) -> (Vec<model::Triple>, Vec<model::Triple>) {
-    // let a_box = reasoning_service::load_data(&format!("C:\\Users\\xhimi\\Documents\\University\\THESIS\\Lehigh_University_Benchmark\\LUB1_nt_consolidated\\Universities.nt"), index, peers);
-    let a_box = load_data(a_box_filename, index, peers);
-    // let t_box = reasoning_service::load_ontology("C:\\Users\\xhimi\\Documents\\University\\THESIS\\univ-bench-prefix-changed.owl");
-    let t_box = load_ontology(t_box_filename);
-    // Preprocess the terminological box
-    let t_box = preprocess(t_box);
-    (t_box, a_box)
-}
-*/
-/*
-fn preprocess(t_box: HashSet<model::Triple>) -> Vec<model::Triple> {
-    let mut res: Vec<model::Triple> = Vec::new();
-    // TODO: Preprocess the data restricting only triples in rdfs (RhoDF)
-    for triple in t_box {
-        res.push(triple)
-    }
-    res
-}
-*/
-
-use differential_dataflow::input::InputSession;
-
-// [IMPROVEMENT]:
-// Unlike the first part of the software, the ontology is required to be in the ntriples
-// format as that's the only parser that I have as of right now. So this works for both
-// ontology and abox. Implement a parser for other serialization methods?
-use encoder::{Encoder, EncodingLogic, ParserTrait};
-pub fn load_data<E, K, V, P, F>(
-    file_name: &str,
-    index: Option<usize>,
-    peers: Option<usize>,
-    parser: &mut P,
-    encoding_logic: &mut F,
-) -> (E::MapStructure, E::EncodedDataSet)
-where
-    E: Encoder<K, V>,
-    P: ParserTrait<K>,
-    F: EncodingLogic<K, V>,
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
-{
-    E::load_from_file(file_name, encoding_logic, parser, index, peers)
-}
-// It is important that the returned map includes the encoding of both the a_box and t_box
-pub fn load_data_same_encoder_same_encoded_dataset<E, K, V, P, F>(
-    a_box_filename: &str,
-    t_box_filename: &str,
-    index: Option<usize>,
-    peers: Option<usize>,
-    parser: &mut P,
-    encoding_logic: &mut F,
-) -> (E::MapStructure, E::EncodedDataSet)
-where
-    E: Encoder<K, V>,
-    P: ParserTrait<K>,
-    F: EncodingLogic<K, V>,
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
-{
-    E::load_from_multiple_files_same_encoded_dataset(
-        &[a_box_filename, t_box_filename],
-        encoding_logic,
-        parser,
-        index,
-        peers,
-    )
-}
-
-// It is important that the returned map includes the encoding of both the a_box and t_box
-pub fn load_data_same_encoder_different_encoded_dataset<E, K, V, P, F>(
-    a_box_filename: &str,
-    t_box_filename: &str,
-    index: Option<usize>,
-    peers: Option<usize>,
-    parser: &mut P,
-    encoding_logic: &mut F,
-) -> (E::MapStructure, Vec<E::EncodedDataSet>)
-where
-    E: Encoder<K, V>,
-    P: ParserTrait<K>,
-    F: EncodingLogic<K, V>,
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
-{
-    E::load_from_multiple_files_different_encoded_dataset(
-        &[a_box_filename, t_box_filename],
-        encoding_logic,
-        parser,
-        index,
-        peers,
-    )
-}
-
-/// insert data provided by the abox and tbox into the dataflow through
+/// insert data provided by the abox or tbox into the dataflow through
 /// the input handles.
-/// Contract: the a box and the t box use the same encoder. Using the load_lubm_data
-/// function it is guaranteed that they do.
 pub fn insert_starting_data<E, K, V>(
     a_box: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
+        <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
     t_box: E::EncodedDataSet,
 ) where
-    E: Encoder<K, V>,
+    E: EncoderTrait<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
+    <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
     for triple in t_box {
         data_input.insert(triple);
@@ -720,32 +356,26 @@ pub fn insert_starting_data<E, K, V>(
     data_input.flush();
 }
 
-/// Incremental addition maintenance
 pub fn add_data<E, K, V>(
-    a_box_batch: E::EncodedDataSet,
+    batch: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
+        <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
-    t_box_batch: E::EncodedDataSet,
     time_to_advance_to: usize,
 ) where
-    E: Encoder<K, V>,
+    E: EncoderTrait<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
+    <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
-    for triple in t_box_batch {
-        data_input.insert(triple);
-    }
-
-    for triple in a_box_batch {
+    for triple in batch {
         data_input.insert(triple);
     }
 
@@ -753,33 +383,26 @@ pub fn add_data<E, K, V>(
     data_input.flush();
 }
 
-// ASSUMPTION: closed world: if `something sco something_else` is missing it means that it is not true that `something sco something_else`
-/// Incremental deletion maintenance:
 pub fn remove_data<E, K, V>(
-    a_box_batch: E::EncodedDataSet,
+    batch: E::EncodedDataSet,
     data_input: &mut InputSession<
         usize,
-        <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
+        <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
         isize,
     >,
-    t_box_batch: E::EncodedDataSet,
     time_to_advance_to: usize,
 ) where
-    E: Encoder<K, V>,
+    E: EncoderTrait<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
+    <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
-    for triple in t_box_batch {
-        data_input.remove(triple);
-    }
-
-    for triple in a_box_batch {
+    for triple in batch {
         data_input.remove(triple);
     }
 
@@ -787,36 +410,29 @@ pub fn remove_data<E, K, V>(
     data_input.flush();
 }
 
-use crate::encoder::Triple;
 /// Save the full materialization fo file
-pub fn save_to_file_through_trace<E, K, V>(
+pub fn save_to_file_through_trace<E, K, V, W: AsRef<std::path::Path>>(
     map: &E::MapStructure,
-    path: &str,
+    path: W,
     trace: &mut TraceAgent<
         OrdKeySpine<
-            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
+            <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
             usize,
             isize,
         >,
     >,
     time: usize,
 ) where
-    E: Encoder<K, V>,
+    E: EncoderTrait<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
+    <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static + Triple<V>,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash + std::fmt::Display,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Display + std::fmt::Debug,
 {
-    use crate::encoder::BiMapTrait;
-    use differential_dataflow::trace::cursor::Cursor;
-    use differential_dataflow::trace::TraceReader;
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
     let mut full_materialization_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -830,7 +446,6 @@ pub fn save_to_file_through_trace<E, K, V>(
         while let Some(key) = cursor.get_key(&storage) {
             while let Some(&()) = cursor.get_val(&storage) {
                 let mut count = 0;
-                use timely::order::PartialOrder;
                 cursor.map_times(&storage, |t, diff| {
                     // println!("{}, DIFF:{:?} ", key, diff);
                     if t.less_equal(&(time - 1)) {
@@ -847,7 +462,7 @@ pub fn save_to_file_through_trace<E, K, V>(
                     let o = map.get_left(key.o()).expect("Could not find the object");
                     if let Err(e) = writeln!(full_materialization_file, "<{}> <{}> <{}> .", s, p, o)
                     {
-                        eprintln!("Couldn't write to file: {}", e);
+                        panic!("Couldn't write to file: {}", e);
                     }
                 }
                 cursor.step_val(&storage);
@@ -890,34 +505,30 @@ pub fn save_to_file_through_trace<E, K, V>(
 pub fn return_vector<E, K, V>(
     trace: &mut TraceAgent<
         OrdKeySpine<
-            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
+            <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item,
             usize,
             isize,
         >,
     >,
     time: usize,
-) -> Vec<<<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item>
+) -> Vec<<<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item>
 where
-    E: Encoder<K, V>,
+    E: EncoderTrait<K, V>,
     E::EncodedDataSet: std::iter::IntoIterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
+    <<E as encoder::EncoderTrait<K, V>>::EncodedDataSet as std::iter::IntoIterator>::Item:
         std::fmt::Debug + Clone + Ord + 'static,
     // [IMPROVEMENT]:
     // Try to understand why V has to be 'static and think of the impact that
     // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
-    use differential_dataflow::trace::cursor::Cursor;
-    use differential_dataflow::trace::TraceReader;
-
     let mut res = Vec::new();
 
     if let Some((mut cursor, storage)) = trace.cursor_through(&[time]) {
         while let Some(key) = cursor.get_key(&storage) {
             while let Some(&()) = cursor.get_val(&storage) {
                 let mut count = 0;
-                use timely::order::PartialOrder;
                 cursor.map_times(&storage, |t, diff| {
                     // println!("{}, DIFF:{:?} ", key, diff);
                     if t.less_equal(&(time - 1)) {
@@ -1044,5 +655,11 @@ mod tests {
     #[test]
     fn it_works() {
         assert_eq!(2 + 2, 4);
+    }
+
+    #[test]
+    fn does_it() {
+        assert!(true);
+        println!("Showing");
     }
 }

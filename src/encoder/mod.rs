@@ -4,7 +4,8 @@ pub use bijective::BijectiveMap;
 
 mod encoder;
 pub use encoder::BiMapEncoder;
-pub use encoder::Encoder;
+pub use encoder::EncoderTrait;
+pub use encoder::EncoderUnit;
 
 mod encoding_logic;
 pub use encoding_logic::EncodingLogic;

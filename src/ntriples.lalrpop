@@ -1,5 +1,5 @@
 use log::{debug};
-use std::rc::Rc;
+use std::sync::Arc;
 grammar;
 
 pub NTriplesString = DsvDataset<StringTerm>;
@@ -19,7 +19,7 @@ Dot<T>: Vec<T> = {
 Triple<T>: (T, T, T) =
 <s: T> <p: T> <o: T> => (s, p, o);
 
-StringTerm: Rc<String> = {
+StringTerm: Arc<String> = {
 		    r#"""# <s: r##"[a-z:?/0-9A-Z\-#\x20.,]+"##> r#"""#  <d: r"\^\^([a-z_:?/.0-9A-Z\-#<>])+"?> <l: r"@([a-zA-Z\-])+"?> => {
 			    let d = match d {
 				    Some(s) => s,
@@ -31,13 +31,13 @@ StringTerm: Rc<String> = {
 			    };
 			    let string = format!("\"{}\"{}{}", s, d, l);
 			    debug!("{}", string);
-			    Rc::from(string)
+			    Arc::from(string)
 		    },
 		    <t: r##"<([a-z_:?/.0-9A-Z\-#])+>"##> => {
-			    let string = String::from(&t[1..t.len()-1]); debug!("{}", string); Rc::from(string)
+			    let string = String::from(&t[1..t.len()-1]); debug!("{}", string); Arc::from(string)
 		    },
 		    <t: r##"_([a-z_:?/0-9A-Z\-#])+"##> => {
-			    let string = String::from(t); debug!("{}", string); Rc::from(string)
+			    let string = String::from(t); debug!("{}", string); Arc::from(string)
 		    },
 	    };
 

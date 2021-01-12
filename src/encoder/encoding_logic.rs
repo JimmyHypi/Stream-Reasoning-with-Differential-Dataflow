@@ -1,12 +1,12 @@
 // This implements encoding logic, this is a trait because encoding logic might work with some
 // state
-pub trait EncodingLogic<K, V> {
+pub trait EncodingLogic<K, V>: Send + Sync {
     fn encode(&mut self, string: K) -> V;
 }
 
 // Example Implementation
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct SimpleLogic {
     // [IMPROVEMENT]:
@@ -23,8 +23,8 @@ impl SimpleLogic {
     }
 }
 
-impl EncodingLogic<Rc<String>, u64> for SimpleLogic {
-    fn encode(&mut self, _string: Rc<String>) -> u64 {
+impl EncodingLogic<Arc<String>, u64> for SimpleLogic {
+    fn encode(&mut self, _string: Arc<String>) -> u64 {
         let res = self.current_index;
         self.current_index += 1;
         res

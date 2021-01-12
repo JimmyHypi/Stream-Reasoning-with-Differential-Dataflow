@@ -1,4 +1,4 @@
-use crate::Encoder;
+use crate::EncoderTrait;
 use crate::Triple;
 
 type ParsedTriple<T> = (T, T, T);
@@ -6,8 +6,8 @@ type DecodedTriples<T> = Vec<ParsedTriple<T>>;
 
 pub trait BiMapTrait<K, V>
 where
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
     fn get_right(&self, left: &K) -> Option<&V>;
 
@@ -24,7 +24,7 @@ where
     // something else?
     fn translate<E>(&self, encoded_dataset: E::EncodedDataSet) -> DecodedTriples<&K>
     where
-        E: Encoder<K, V>,
+        E: EncoderTrait<K, V>,
         <E::EncodedDataSet as IntoIterator>::Item: Triple<V>,
     {
         let mut translated = vec![];
@@ -94,8 +94,8 @@ where
 
 impl<K, V> BiMapTrait<K, V> for BijectiveMap<K, V>
 where
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
+    V: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
+    K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug,
 {
     fn get_left(&self, right: &V) -> Option<&K> {
         self.bimap.get_by_right(&right)
