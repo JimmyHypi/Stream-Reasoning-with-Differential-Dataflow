@@ -54,6 +54,15 @@ where
 
 #[derive(StructOpt, Debug)]
 pub struct Args {
+    // Differential dataflow parameters
+    #[structopt(short, long)]
+    workers: Option<usize>,
+    #[structopt(short = "n", long = "processes")]
+    number_of_processes: Option<usize>,
+    #[structopt(short = "p", long = "process")]
+    process_id: Option<usize>,
+    #[structopt(short, long)]
+    hostfile: Option<std::path::PathBuf>,
     #[structopt(parse(from_os_str))]
     t_box_path: std::path::PathBuf,
     #[structopt(parse(from_os_str))]
@@ -70,12 +79,12 @@ pub struct Args {
     incremental_file_paths: Vec<(std::path::PathBuf, IncrementalMode, IncrementalType)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum IncrementalMode {
     Addition,
     Deletion,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum IncrementalType {
     ABox,
     TBox,
@@ -171,17 +180,17 @@ where
         + 'static,
 {
     let args = Arc::new(Mutex::new(Args::from_args()));
-    // The 4 is
-    // 1) name of the program to be run
-    // 2) t_box_path
-    // 3) a_box_path
-    // 4) output_folder
-    // The *2 comes from the fact that a parameter has the specifier -u and the path
-    let number_of_args = 4 + args.lock().unwrap().incremental_file_paths.len() * 2;
-    timely::execute_from_args(std::env::args().skip(number_of_args), move |worker| {
+    let timely_args = get_timely_args(&args.lock().unwrap());
+    info!("{:#?}", timely_args);
+    let timely_params = TimelyParams {
+        params: timely_args,
+    };
+
+    timely::execute_from_args(timely_params, move |worker| {
         let mut timer = worker.timer();
         let index = worker.index();
         let peers = worker.peers();
+        info!("Index: {}, Peers: {}", index, peers);
 
         let mut probe = timely::dataflow::ProbeHandle::new();
         // VERY IMPORTANT:
@@ -202,6 +211,7 @@ where
         // workers?
         if index == 0 {
             info!("Load time: {}μs", timer.elapsed().as_micros());
+            info!("Load time: {}ms", timer.elapsed().as_millis());
             timer = std::time::Instant::now();
         }
 
@@ -223,30 +233,41 @@ where
                 "Full Materialization time: {}μs",
                 timer.elapsed().as_micros()
             );
+            info!(
+                "Full Materialization time: {}ms",
+                timer.elapsed().as_millis()
+            );
         }
 
         args.lock()
             .unwrap()
             .output_folder
-            .push("full_materialization.nt");
+            .push(format!("full_materialization_worker{}.nt", index));
+
         let mut locked = args.lock().unwrap();
-        let output_path = locked.output_folder.as_path();
+        let output_path = locked.output_folder.to_owned();
+        // Restore path
+        locked.output_folder.pop();
+        std::mem::drop(locked);
 
         save_to_file_through_trace::<E, _, _, _>(
             &encoder.lock().unwrap().get_map().as_ref().unwrap(),
-            output_path,
+            output_path.as_path(),
             &mut result_trace,
             1,
         );
-        // Restore path
-        locked.output_folder.pop();
 
         if index == 0 {
             info!(
                 "Saving to file time [Full Materialization]: {}μs",
                 timer.elapsed().as_micros(),
             );
+            info!(
+                "Saving to file time [Full Materialization]: {}ms",
+                timer.elapsed().as_millis(),
+            );
         }
+
         // There is a `big` limit here. Dataflow Computation works great for applications where
         // all the data are the same. S(ame)IMD, sort of speaking. In our case we have T-Box triples that are different
         // from A-Bpx triples as each worker requires it. The current solution inserts all the
@@ -257,7 +278,16 @@ where
         // [IMPROVEMENT]
         // What about a data structure shared by all the workers where all the t-box triples are
         // stored only once?
-        for (i, (path, mode, t)) in locked.incremental_file_paths.iter().enumerate() {
+        let locked = args.lock().unwrap();
+        let mut thread_safe = vec![];
+
+        for (path, a, b) in locked.incremental_file_paths.iter() {
+            thread_safe.push((path.to_owned(), a.to_owned(), b.to_owned()));
+        }
+
+        std::mem::drop(locked);
+
+        for (i, (path, mode, t)) in thread_safe.iter().enumerate() {
             let data = match t {
                 IncrementalType::TBox => encoder.lock().unwrap().encode(path.as_path(), None, None),
                 IncrementalType::ABox => {
@@ -276,31 +306,52 @@ where
                     i + 1,
                     timer.elapsed().as_micros()
                 );
+                info!(
+                    "Update #{} Load time: {}ms",
+                    i + 1,
+                    timer.elapsed().as_millis()
+                );
                 timer = std::time::Instant::now();
             }
 
-            info!("Performing Update #{}. [{:?}, {:?}]", i + 1, mode, t);
+            info!(
+                "Worker: {} Performing Update #{}. [{:?}, {:?}]",
+                index,
+                i + 1,
+                mode,
+                t
+            );
 
             match mode {
                 IncrementalMode::Addition => add_data::<E, _, _>(data, &mut data_input, 2 + i),
                 IncrementalMode::Deletion => remove_data::<E, _, _>(data, &mut data_input, 2 + i),
             }
 
+            info!("Worker {} reached line 308", index);
             while probe.less_than(data_input.time()) {
                 worker.step();
             }
 
+            info!("Worker {} reached line 313", index);
             if index == 0 {
                 info!(
                     "Update #{} Update Time: {}μs",
                     i + 1,
                     timer.elapsed().as_micros()
                 );
+                info!(
+                    "Update #{} Update Time: {}ms",
+                    i + 1,
+                    timer.elapsed().as_millis()
+                );
+
                 timer = std::time::Instant::now();
             }
 
-            let mut path = locked.output_folder.clone();
-            path.push(&format!("incremental_materialization_{}.nt", i + 1)[..]);
+            let locked = args.lock().unwrap();
+            let mut path = locked.output_folder.to_owned();
+            std::mem::drop(locked);
+            path.push(&format!("incremental_materialization_{}_worker{}.nt", i + 1, index)[..]);
 
             save_to_file_through_trace::<E, _, _, _>(
                 &encoder.lock().unwrap().get_map().as_ref().unwrap(),
@@ -315,6 +366,12 @@ where
                     i + 1,
                     timer.elapsed().as_micros()
                 );
+                info!(
+                    "Update #{} Save to File Time: {}ms",
+                    i + 1,
+                    timer.elapsed().as_millis()
+                );
+
                 timer = std::time::Instant::now();
             }
         }
@@ -323,6 +380,42 @@ where
     Ok(())
 }
 
+struct TimelyParams {
+    params: Vec<String>,
+}
+
+impl Iterator for TimelyParams {
+    type Item = String;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.params.len() > 0 {
+            Some(self.params.remove(0))
+        } else {
+            None
+        }
+    }
+}
+
+fn get_timely_args(args: &Args) -> Vec<String> {
+    let mut result = vec![];
+    result.push("useless".to_string());
+    if let Some(w) = args.workers {
+        result.push("-w".to_string());
+        result.push(format!("{}", w));
+    }
+    if let Some(n) = args.number_of_processes {
+        result.push("-n".to_string());
+        result.push(format!("{}", n));
+    }
+    if let Some(h) = args.hostfile.as_ref() {
+        result.push("-h".to_string());
+        result.push(format!("{:?}", h));
+    }
+    if let Some(p) = args.process_id {
+        result.push("-p".to_string());
+        result.push(format!("{}", p));
+    }
+    result
+}
 /// insert data provided by the abox or tbox into the dataflow through
 /// the input handles.
 pub fn insert_starting_data<E, K, V>(
