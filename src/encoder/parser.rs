@@ -10,16 +10,16 @@ type ParsedTriple<T> = (T, T, T);
 pub trait ParserTrait<T>: Send + Sync {
     type TripleType: Triple<T>;
 
-    fn parse(&mut self, input: &str) -> Vec<Self::TripleType>;
+    fn parse_triple(&mut self, input: &str) -> Self::TripleType;
 }
 
 pub struct NTriplesParser {
-    lalrpop_parser: ntriples::NTriplesStringParser,
+    lalrpop_parser: ntriples::ArcStringTripleParser,
 }
 
 impl NTriplesParser {
     pub fn new() -> Self {
-        let lalrpop_parser = ntriples::NTriplesStringParser::new();
+        let lalrpop_parser = ntriples::ArcStringTripleParser::new();
         Self { lalrpop_parser }
     }
 }
@@ -27,9 +27,9 @@ impl NTriplesParser {
 impl ParserTrait<Arc<String>> for NTriplesParser {
     type TripleType = ParsedTriple<Arc<String>>;
 
-    fn parse(&mut self, input: &str) -> Vec<Self::TripleType> {
+    fn parse_triple(&mut self, input: &str) -> Self::TripleType {
         self.lalrpop_parser
             .parse(input)
-            .expect("FAILED TO PARSE STRING")
+            .expect("FAILED TO PARSE TRIPLE")
     }
 }

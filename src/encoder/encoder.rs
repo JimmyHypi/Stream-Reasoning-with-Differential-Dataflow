@@ -1,4 +1,7 @@
 use crate::encoder::{BiMapTrait, BijectiveMap, EncodingLogic, ParserTrait, Triple};
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::marker::PhantomData;
 use std::path::Path;
 
@@ -105,7 +108,8 @@ where
 {
     // Maps each string of type K to another type V
     type MapStructure: BiMapTrait<K, V> + Send + Sync;
-    // Set of triples in the encoding domain
+    // Set of triples in the encoding domain: for now this is IntoIterator for compatibility with
+    // Vec. But I want it an Iterator
     type EncodedDataSet: IntoIterator;
 
     // The lalrpop parser always returns a vector so it feels safe to "hard code" the type
@@ -172,7 +176,7 @@ where
         F: EncodingLogic<K, V>,
         P: ParserTrait<K>,
     {
-        let parsed_triples = Self::parse(file_name, parser);
+        let parsed_triples = Self::parse(file_name, parser, index, peers);
         Self::insert_from_parser_output::<_, P>(map, parsed_triples, encoding_logic, index, peers)
     }
 
@@ -187,7 +191,7 @@ where
         F: EncodingLogic<K, V>,
         P: ParserTrait<K>,
     {
-        let parsed_triples = vec![Self::parse(file_name, parser)];
+        let parsed_triples = vec![Self::parse(file_name, parser, index, peers)];
         let (map, mut vec) =
             Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers);
         assert_eq!(vec.len(), 1);
@@ -210,7 +214,7 @@ where
     {
         let mut parsed_triples = vec![];
         for file_name in file_names {
-            parsed_triples.append(&mut Self::parse(file_name, parser));
+            parsed_triples.append(&mut Self::parse(file_name, parser, index, peers));
         }
         let (map, mut vec) = Self::load_from_parser_output::<_, P>(
             vec![parsed_triples],
@@ -238,7 +242,7 @@ where
     {
         let mut parsed_triples = vec![];
         for file_name in file_names {
-            parsed_triples.push(Self::parse(file_name, parser));
+            parsed_triples.push(Self::parse(file_name, parser, index, peers));
         }
         Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers)
     }
@@ -249,16 +253,27 @@ where
     fn parse<P: ParserTrait<K>, W: AsRef<Path>>(
         file_name: W,
         parser: &mut P,
+        index: Option<usize>,
+        peers: Option<usize>,
     ) -> Vec<P::TripleType> {
+        // If index and peers are None it means that no parallel execution is requested
+        let mut triples = vec![];
+        let index = index.unwrap_or(0);
+        let peers = peers.unwrap_or(1);
+
+        let f = File::open(file_name).expect("Failed to read the file");
+        let reader = BufReader::new(f);
+        // Parallel execution of parsing. Each worker/thread parses a part of the dataset
         // [IMPROVEMENT]:
-        // 1) Storing all the data in one big string seems a little meh.
-        //    What if the data is REALLY big? We need some sort of caching or reading chunks
-        //    from file. Look into this. Use a BufReader
         // 2) Error handling. Instead of returning a Vec<..> throw a result using the ? op.
         //    This require to define my own error and convert all of this errors into that new
         //    one. Turn the expects into a type of error.
-        let all_the_data = std::fs::read_to_string(file_name).expect("FAILED TO READ THE FILE");
-        parser.parse(&all_the_data[..])
+        for (i, line) in reader.lines().enumerate() {
+            if i % peers == index {
+                triples.push(parser.parse_triple(&line.expect("Failed to read triple")[..]));
+            }
+        }
+        triples
     }
 
     // [IMPROVEMENT]:

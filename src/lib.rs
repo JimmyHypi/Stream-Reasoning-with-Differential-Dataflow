@@ -181,7 +181,6 @@ where
 {
     let args = Arc::new(Mutex::new(Args::from_args()));
     let timely_args = get_timely_args(&args.lock().unwrap());
-    info!("{:#?}", timely_args);
     let timely_params = TimelyParams {
         params: timely_args,
     };
@@ -190,7 +189,6 @@ where
         let mut timer = worker.timer();
         let index = worker.index();
         let peers = worker.peers();
-        info!("Index: {}, Peers: {}", index, peers);
 
         let mut probe = timely::dataflow::ProbeHandle::new();
         // VERY IMPORTANT:
@@ -210,7 +208,6 @@ where
         // Here we are considering only the worker with index 0.. maybe an averatge among all the
         // workers?
         if index == 0 {
-            info!("Load time: {}μs", timer.elapsed().as_micros());
             info!("Load time: {}ms", timer.elapsed().as_millis());
             timer = std::time::Instant::now();
         }
@@ -229,10 +226,6 @@ where
         }
 
         if index == 0 {
-            info!(
-                "Full Materialization time: {}μs",
-                timer.elapsed().as_micros()
-            );
             info!(
                 "Full Materialization time: {}ms",
                 timer.elapsed().as_millis()
@@ -258,10 +251,6 @@ where
         );
 
         if index == 0 {
-            info!(
-                "Saving to file time [Full Materialization]: {}μs",
-                timer.elapsed().as_micros(),
-            );
             info!(
                 "Saving to file time [Full Materialization]: {}ms",
                 timer.elapsed().as_millis(),
@@ -302,11 +291,6 @@ where
             // workers?
             if index == 0 {
                 info!(
-                    "Update #{} Load time: {}μs",
-                    i + 1,
-                    timer.elapsed().as_micros()
-                );
-                info!(
                     "Update #{} Load time: {}ms",
                     i + 1,
                     timer.elapsed().as_millis()
@@ -314,31 +298,16 @@ where
                 timer = std::time::Instant::now();
             }
 
-            info!(
-                "Worker: {} Performing Update #{}. [{:?}, {:?}]",
-                index,
-                i + 1,
-                mode,
-                t
-            );
-
             match mode {
                 IncrementalMode::Addition => add_data::<E, _, _>(data, &mut data_input, 2 + i),
                 IncrementalMode::Deletion => remove_data::<E, _, _>(data, &mut data_input, 2 + i),
             }
 
-            info!("Worker {} reached line 308", index);
             while probe.less_than(data_input.time()) {
                 worker.step();
             }
 
-            info!("Worker {} reached line 313", index);
             if index == 0 {
-                info!(
-                    "Update #{} Update Time: {}μs",
-                    i + 1,
-                    timer.elapsed().as_micros()
-                );
                 info!(
                     "Update #{} Update Time: {}ms",
                     i + 1,
@@ -361,11 +330,6 @@ where
             );
 
             if index == 0 {
-                info!(
-                    "Update #{} Save to File Time: {}μs",
-                    i + 1,
-                    timer.elapsed().as_micros()
-                );
                 info!(
                     "Update #{} Save to File Time: {}ms",
                     i + 1,

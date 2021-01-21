@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 fn main() {
     env_logger::init();
     let parser = NTriplesParser::new();
+    // It sucks that this has a state, encoder needs to lock the resource all the times.
     let encoding_logic = SimpleLogic::new(0);
     let encoder: Arc<Mutex<EncoderUnit<_, _, BiMapEncoder, _, _>>> =
         Arc::new(Mutex::new(EncoderUnit::new(parser, encoding_logic)));
