@@ -1,12 +1,40 @@
-// This implements encoding logic, this is a trait because encoding logic might work with some
-// state
-pub trait EncodingLogic<K, V>: Send + Sync {
-    fn encode(&mut self, string: K) -> V;
+// This implements encoding logic. This trait has no `self` parameter and the encoding function
+// should not have any state to favour parallelism. This is just experimental and I don't envision
+// to use it. The encoding as of right now it's not parallel. The reason is that for stateless
+// logic collisions can cause a big problem.
+pub trait StatelessEncodingLogic<K, V>: Send + Sync {
+    fn encode(string: K) -> V;
 }
 
 // Example Implementation
 
 use std::sync::Arc;
+
+pub struct StatelessSimpleLogic {}
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+// [IMPROVEMENT]:
+// Collisions in this design are very bad. Very.
+// Possible solution:
+// Let the caller solve collisions. Linear or quadratic probing although this requir check on
+// the string.
+impl StatelessEncodingLogic<Arc<String>, u64> for StatelessSimpleLogic {
+    fn encode(string: Arc<String>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        string.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+// This implements a stateful simple logic. This is needed for comparison between the stateless
+// approach. I want to favor the stateless approach withouth discarding the stateful option
+pub trait EncodingLogic<K, V>: Send + Sync {
+    fn encode(&mut self, string: K) -> V;
+}
+
+// Example Implementation
 
 pub struct SimpleLogic {
     // [IMPROVEMENT]:

@@ -1,5 +1,7 @@
 use crate::encoder::{BiMapTrait, BijectiveMap, EncodingLogic, ParserTrait, Triple};
+use log::info;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::marker::PhantomData;
@@ -30,6 +32,7 @@ where
     E: EncoderTrait<L, R>,
     P: ParserTrait<L>,
     F: EncodingLogic<L, R>,
+    <E::EncodedDataSet as IntoIterator>::Item: std::fmt::Debug,
 {
     pub fn new(parser: P, encoding_logic: F) -> Self {
         Self {
@@ -74,6 +77,55 @@ where
         }
     }
 
+    pub fn encode_persistent(
+        &mut self,
+        file_path: std::path::PathBuf,
+        index: Option<usize>,
+        peers: Option<usize>,
+    ) -> String {
+        // Encoded dataset prepared to be written.
+        // [IMPORTANT]:
+        // This requires to save all the dataset in memory which is meh.
+        let dataset = self.encode(file_path.clone(), index, peers);
+        let output_path = Self::get_encoded_path_name(file_path);
+
+        // Triples are saved as a list of items separated by newline
+        // delimiters. This items are defined in the EncoderUnit struct.
+        let mut full_materialization_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&output_path)
+            // Instead of expecting return a Result<()>
+            .expect("Something wrong happened with the ouput file");
+        for elem in dataset {
+            if let Err(e) = writeln!(full_materialization_file, "{:?}", elem) {
+                panic!("Couldn't write to file: {}", e);
+            }
+        }
+        output_path
+    }
+
+    fn get_encoded_path_name(file_path: std::path::PathBuf) -> String {
+        let mut path_buf = file_path.clone();
+        let path_name = file_path
+            .file_name()
+            .expect("File Path name error")
+            .to_str()
+            .expect("Could not convert OsStr to str");
+
+        let index = path_name.find('.').expect("Could not find `.` in path");
+        let result = format!("encoded_data/{}-encoded.ntenc", &path_name[0..index]);
+        // Create encoded_data/ directory
+        path_buf.pop();
+        path_buf.push("encoded_data/");
+        std::fs::create_dir_all(path_buf.clone())
+            .expect("Could not create `encoded_data/` directory");
+        path_buf.set_file_name(result);
+        path_buf.to_str().unwrap().to_string()
+    }
+
     pub fn get_map(&self) -> &Option<E::MapStructure> {
         &self.bijective_map
     }
@@ -112,6 +164,12 @@ where
     // Vec. But I want it an Iterator
     type EncodedDataSet: IntoIterator;
 
+    fn load_encoded_from_persistent<W: AsRef<Path>>(
+        file_path: W,
+        index: Option<usize>,
+        peers: Option<usize>,
+    ) -> Self::EncodedDataSet;
+
     // The lalrpop parser always returns a vector so it feels safe to "hard code" the type
     // for parsed triple.
     // [PROBLEM]:
@@ -135,8 +193,6 @@ where
         map: &mut Self::MapStructure,
         parsed_triples: Vec<P::TripleType>,
         encoding_logic: &mut F,
-        index: Option<usize>,
-        peers: Option<usize>,
     ) -> Result<Self::EncodedDataSet, (K, V)>
     where
         F: EncodingLogic<K, V>,
@@ -154,8 +210,6 @@ where
     fn load_from_parser_output<F, P>(
         parsed_triples: Vec<Vec<P::TripleType>>,
         encoding_logic: &mut F,
-        index: Option<usize>,
-        peers: Option<usize>,
         // [IMPROVEMENT]:
         // How about defining a structure that has a map and a vec of Encoded data set and return
         // that.
@@ -177,7 +231,7 @@ where
         P: ParserTrait<K>,
     {
         let parsed_triples = Self::parse(file_name, parser, index, peers);
-        Self::insert_from_parser_output::<_, P>(map, parsed_triples, encoding_logic, index, peers)
+        Self::insert_from_parser_output::<_, P>(map, parsed_triples, encoding_logic)
     }
 
     fn load_from_file<F, P, W: AsRef<Path>>(
@@ -192,8 +246,7 @@ where
         P: ParserTrait<K>,
     {
         let parsed_triples = vec![Self::parse(file_name, parser, index, peers)];
-        let (map, mut vec) =
-            Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers);
+        let (map, mut vec) = Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic);
         assert_eq!(vec.len(), 1);
         let only_vec = vec
             .pop()
@@ -216,12 +269,8 @@ where
         for file_name in file_names {
             parsed_triples.append(&mut Self::parse(file_name, parser, index, peers));
         }
-        let (map, mut vec) = Self::load_from_parser_output::<_, P>(
-            vec![parsed_triples],
-            encoding_logic,
-            index,
-            peers,
-        );
+        let (map, mut vec) =
+            Self::load_from_parser_output::<_, P>(vec![parsed_triples], encoding_logic);
         assert_eq!(vec.len(), 1);
         let only_vec = vec
             .pop()
@@ -244,7 +293,7 @@ where
         for file_name in file_names {
             parsed_triples.push(Self::parse(file_name, parser, index, peers));
         }
-        Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic, index, peers)
+        Self::load_from_parser_output::<_, P>(parsed_triples, encoding_logic)
     }
 
     // [IMPROVEMENT]:
@@ -270,9 +319,14 @@ where
         //    one. Turn the expects into a type of error.
         for (i, line) in reader.lines().enumerate() {
             if i % peers == index {
-                triples.push(parser.parse_triple(&line.expect("Failed to read triple")[..]));
+                let l = line.expect("Failed to read triple");
+                let len = l.len();
+                // The - 2 discards the trailing ` .` of each RDF NTriple
+                let l = &l[..len - 2];
+                triples.push(parser.parse_triple(l));
             }
         }
+        info!("Worker: {}\tNumber of triples: {}", index, triples.len());
         triples
     }
 
@@ -294,12 +348,56 @@ pub struct BiMapEncoder {}
 impl EncoderTrait<Arc<String>, u64> for BiMapEncoder {
     type MapStructure = BijectiveMap<Arc<String>, u64>;
     type EncodedDataSet = Vec<EncodedTriple<u64>>;
+    fn load_encoded_from_persistent<W: AsRef<Path>>(
+        file_path: W,
+        index: Option<usize>,
+        peers: Option<usize>,
+    ) -> Self::EncodedDataSet {
+        let index = index.unwrap_or(0);
+        let peers = peers.unwrap_or(1);
 
+        let mut result = vec![];
+
+        let file = File::open(file_path).expect("Could not open file");
+        let buffered = BufReader::new(file);
+        let triples = buffered.lines();
+        for (idx, triple) in triples.enumerate() {
+            if index == idx % peers {
+                let t = triple.expect("Not able to retrieve triple.");
+                let t = t.trim();
+                let numbers = &t[1..t.len() - 1];
+                let mut split_iter = numbers.split(',');
+
+                let s = split_iter
+                    .next()
+                    .expect("Persistent triple has wrong format.")
+                    .trim()
+                    .parse::<u64>()
+                    .expect("Could not parse subject of String triple");
+                let p = split_iter
+                    .next()
+                    .expect("Persistent triple has wrong format.")
+                    .trim()
+                    .parse::<u64>()
+                    .expect("Could not parse property of String triple");
+
+                let o = split_iter
+                    .next()
+                    .expect("Persistent triple has wrong format.")
+                    .trim()
+                    .parse::<u64>()
+                    .expect("Could not parse object of String triple");
+
+                assert!(split_iter.next().is_none());
+
+                result.push((s, p, o));
+            }
+        }
+        result
+    }
     fn load_from_parser_output<F, P>(
         parsed_triples: Vec<Vec<P::TripleType>>,
         encoding_fn: &mut F,
-        _index: Option<usize>,
-        _peers: Option<usize>,
     ) -> (Self::MapStructure, Vec<Self::EncodedDataSet>)
     where
         F: EncodingLogic<Arc<String>, u64>,
@@ -354,8 +452,6 @@ impl EncoderTrait<Arc<String>, u64> for BiMapEncoder {
         map: &mut Self::MapStructure,
         parsed_triples: Vec<P::TripleType>,
         encoding_logic: &mut F,
-        _index: Option<usize>,
-        _peers: Option<usize>,
     ) -> Result<Self::EncodedDataSet, (Arc<String>, u64)>
     where
         F: EncodingLogic<Arc<String>, u64>,

@@ -1,0 +1,73 @@
+<svg viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(72, 364)">
+<g>
+<g>
+<path d="M0,-76.34432 L0,-76.34432 L53.333332,-119.56044 L106.666664,-117.38095 L160,-128.9011 L213.33333,-147.58241 L480,-264.652" fill="none" stroke="#800000" stroke-linejoin="miter" stroke-width="1"/>
+</g>
+<g>
+<circle cx="0" cy="-76.34432234432234" fill="#800000" r="5"/>
+<circle cx="53.333333333333336" cy="-119.56043956043956" fill="#800000" r="5"/>
+<circle cx="106.66666666666667" cy="-117.38095238095238" fill="#800000" r="5"/>
+<circle cx="160" cy="-128.9010989010989" fill="#800000" r="5"/>
+<circle cx="213.33333333333334" cy="-147.58241758241758" fill="#800000" r="5"/>
+<circle cx="480" cy="-264.65201465201466" fill="#800000" r="5"/>
+</g>
+</g>
+<g>
+<g>
+<line stroke="black" stroke-width="1" x1="0" x2="0" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="106.66666666666667" x2="106.66666666666667" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="213.33333333333334" x2="213.33333333333334" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="320" x2="320" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="426.6666666666667" x2="426.6666666666667" y1="0" y2="10"/>
+</g>
+<line stroke="black" stroke-width="1" x1="0" x2="480" y1="0" y2="0"/>
+<g>
+<text font-size="12" text-anchor="middle" x="0" y="20">
+1
+</text>
+<text font-size="12" text-anchor="middle" x="106.66666666666667" y="20">
+3
+</text>
+<text font-size="12" text-anchor="middle" x="213.33333333333334" y="20">
+5
+</text>
+<text font-size="12" text-anchor="middle" x="320" y="20">
+7
+</text>
+<text font-size="12" text-anchor="middle" x="426.6666666666667" y="20">
+9
+</text>
+</g>
+<text font-size="12" text-anchor="middle" x="240" y="30">
+Universities
+</text>
+</g>
+<g>
+<g>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-61.64835164835165" y2="-61.64835164835165"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-136.37362637362637" y2="-136.37362637362637"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-211.0989010989011" y2="-211.0989010989011"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-285.8241758241758" y2="-285.8241758241758"/>
+</g>
+<line stroke="black" stroke-width="1" x1="0" x2="0" y1="0" y2="-340"/>
+<g>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-61.64835164835165">
+0
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-136.37362637362637">
+40
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-211.0989010989011">
+80
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-285.8241758241758">
+120
+</text>
+</g>
+<text font-size="12" text-anchor="middle" transform="rotate(-90 -36 -170)" x="-36" y="-182">
+Load Time (ms)
+</text>
+</g>
+</g>
+</svg>

@@ -3,6 +3,8 @@
 extern crate lalrpop_util;
 
 use crate::encoder::BiMapTrait;
+use crate::eval::Statistics;
+use crate::model::{RDFS_DOMAIN, RDFS_RANGE, RDFS_SUB_CLASS_OF, RDFS_SUB_PROPERTY_OF, RDF_TYPE};
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::OrdKeySpine;
@@ -11,7 +13,8 @@ use differential_dataflow::{Collection, ExchangeData};
 use log::info;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Instant;
 use structopt::StructOpt;
 use timely::communication::allocator::generic::Generic;
 use timely::dataflow::scopes::child::Child;
@@ -27,6 +30,7 @@ use encoder::EncodingLogic;
 use encoder::ParserTrait;
 use encoder::Triple;
 
+pub mod eval;
 pub mod model;
 
 fn parse_key_val<T, U, V>(s: &str) -> Result<(T, U, V), Box<dyn std::error::Error>>
@@ -56,19 +60,19 @@ where
 pub struct Args {
     // Differential dataflow parameters
     #[structopt(short, long)]
-    workers: Option<usize>,
+    pub workers: Option<usize>,
     #[structopt(short = "n", long = "processes")]
-    number_of_processes: Option<usize>,
+    pub number_of_processes: Option<usize>,
     #[structopt(short = "p", long = "process")]
-    process_id: Option<usize>,
+    pub process_id: Option<usize>,
     #[structopt(short, long)]
-    hostfile: Option<std::path::PathBuf>,
+    pub hostfile: Option<std::path::PathBuf>,
     #[structopt(parse(from_os_str))]
-    t_box_path: std::path::PathBuf,
+    pub t_box_path: std::path::PathBuf,
     #[structopt(parse(from_os_str))]
-    a_box_path: std::path::PathBuf,
+    pub a_box_path: std::path::PathBuf,
     #[structopt(parse(from_os_str))]
-    output_folder: std::path::PathBuf,
+    pub output_folder: std::path::PathBuf,
     #[structopt(
         name = "UPDATE",
         short = "u",
@@ -76,16 +80,16 @@ pub struct Args {
         parse(try_from_str = parse_key_val),
         number_of_values = 1,
     )]
-    incremental_file_paths: Vec<(std::path::PathBuf, IncrementalMode, IncrementalType)>,
+    pub incremental_file_paths: Vec<(std::path::PathBuf, IncrementalMode, IncrementalType)>,
 }
 
 #[derive(Debug, Clone)]
-enum IncrementalMode {
+pub enum IncrementalMode {
     Addition,
     Deletion,
 }
 #[derive(Debug, Clone)]
-enum IncrementalType {
+pub enum IncrementalType {
     ABox,
     TBox,
 }
@@ -93,7 +97,7 @@ enum IncrementalType {
 // Error Handling.
 // This should go in its own module
 #[derive(Debug)]
-struct ParseModeError {
+pub struct ParseModeError {
     string: String,
 }
 
@@ -145,7 +149,7 @@ impl std::str::FromStr for IncrementalType {
     }
 }
 pub fn run_materialization<L, R, E, P, F, M>(
-    encoder: Arc<Mutex<EncoderUnit<L, R, E, P, F>>>,
+    mut encoder: EncoderUnit<L, R, E, P, F>,
     materialization: M,
 ) -> Result<(), String>
 where
@@ -154,7 +158,14 @@ where
     // worker to worker to be 'static because we don't want the closure to outlive
     // the variable.. Is there another way around?
     R: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static + Clone + Copy,
-    L: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + std::fmt::Display + Send + Sync + 'static,
+    L: std::cmp::Eq
+        + std::hash::Hash
+        + std::fmt::Debug
+        + std::fmt::Display
+        + Send
+        + Sync
+        + 'static
+        + From<String>,
     E: EncoderTrait<L, R> + 'static,
     <E::EncodedDataSet as IntoIterator>::Item: ExchangeData
         + Triple<R>
@@ -173,17 +184,76 @@ where
                 <E::EncodedDataSet as IntoIterator>::Item,
             >,
             &mut ProbeHandle<usize>,
+            // RDFS keywords. These might be needed
+            &[R; 5],
         )
             -> TraceAgent<OrdKeySpine<<E::EncodedDataSet as IntoIterator>::Item, usize, isize>>
         + Send
         + Sync
         + 'static,
 {
-    let args = Arc::new(Mutex::new(Args::from_args()));
-    let timely_args = get_timely_args(&args.lock().unwrap());
+    let args = Arc::new(Args::from_args());
+    let timely_args = get_timely_args(args.clone());
     let timely_params = TimelyParams {
         params: timely_args,
     };
+
+    // [IMPORTANT]:
+    // As of right now, the encoding is performed outside the dataflow computation, i.e. is not
+    // parallel.
+    // The encoder contains state that needs to be shared by the different workers. A possible
+    // solution might be the use of message passing where all the workers communicate to a
+    // thread their state change. Or locking the encoder. This last solution does not seem to be
+    // efficient as ,in order to encode, a worker needs exclusive control over the encoder.
+    // Moreover the encoding is persistent: it is first saved on a file and then read by the
+    // worker, this for two reasons:
+    // 1) Extend the functionalities to reuse the encoding withouth re-encoding (requires a
+    //    read_encoding() function that is not implemented)
+    // 2) Reading from within the timely dataflow worker closure is hard. Requires cloning a lot of
+    //    very long vectors. One possible way of doing it is with channels where each thread
+    //    receives one triple. Now this is a mess, I don't think diving into it is now worth it.
+    //    My focus right now is on the materialization.
+    let mut start = Instant::now();
+
+    let t_box_encoded_path = encoder.encode_persistent(args.t_box_path.clone(), None, None);
+    info!(
+        "Persistent Encoding of TBox: {}ms",
+        start.elapsed().as_millis()
+    );
+    start = Instant::now();
+
+    let a_box_encoded_path = encoder.encode_persistent(args.a_box_path.clone(), None, None);
+    info!(
+        "Persistent Encoding of ABox: {}ms",
+        start.elapsed().as_millis()
+    );
+    start = Instant::now();
+
+    // Get the encoding of the constant
+    let rdfs_keywords = [
+        *encoder.get_right_from_map(L::from(String::from(RDFS_SUB_CLASS_OF))),
+        *encoder.get_right_from_map(L::from(String::from(RDFS_SUB_PROPERTY_OF))),
+        *encoder.get_right_from_map(L::from(String::from(RDF_TYPE))),
+        *encoder.get_right_from_map(L::from(String::from(RDFS_DOMAIN))),
+        *encoder.get_right_from_map(L::from(String::from(RDFS_RANGE))),
+    ];
+
+    let mut update_paths = vec![];
+
+    for (i, (path, a, b)) in args.incremental_file_paths.iter().enumerate() {
+        let update_path = encoder.encode_persistent(path.to_owned(), None, None);
+
+        info!(
+            "Persistent Encoding of Update #{}: {}ms",
+            i,
+            start.elapsed().as_millis()
+        );
+        start = Instant::now();
+
+        update_paths.push((update_path, a.to_owned(), b.to_owned()));
+    }
+
+    let safe_encoder = Arc::new(encoder);
 
     timely::execute_from_args(timely_params, move |worker| {
         let mut timer = worker.timer();
@@ -191,31 +261,22 @@ where
         let peers = worker.peers();
 
         let mut probe = timely::dataflow::ProbeHandle::new();
+
         // VERY IMPORTANT:
         // TBox data needs to be inserted by EACH WORKER, hence we don't pass the
         // index and the peers to parallelize the computation.
-        let t_data =
-            encoder
-                .lock()
-                .unwrap()
-                .encode(args.lock().unwrap().t_box_path.as_path(), None, None);
-        let a_data = encoder.lock().unwrap().encode(
-            args.lock().unwrap().a_box_path.as_path(),
-            Some(index),
-            Some(peers),
-        );
-        // [IMPROVEMENT]:
-        // Here we are considering only the worker with index 0.. maybe an averatge among all the
-        // workers?
-        if index == 0 {
-            info!("Load time: {}ms", timer.elapsed().as_millis());
-            timer = std::time::Instant::now();
-        }
+        let t_data = E::load_encoded_from_persistent(t_box_encoded_path.clone(), None, None);
+        let a_data =
+            E::load_encoded_from_persistent(a_box_encoded_path.clone(), Some(index), Some(peers));
+
+        let load_time = timer.elapsed().as_millis();
+        info!("Worker {}\t Load time: {}ms", index, load_time,);
+        timer = std::time::Instant::now();
 
         let (mut data_input, mut result_trace) = worker.dataflow::<usize, _, _>(|scope| {
             let (data_input, data_collection) =
                 scope.new_collection::<<E::EncodedDataSet as IntoIterator>::Item, _>();
-            let res_trace = materialization(&data_collection, &mut probe);
+            let res_trace = materialization(&data_collection, &mut probe, &rdfs_keywords);
             (data_input, res_trace)
         });
 
@@ -225,37 +286,39 @@ where
             worker.step();
         }
 
-        if index == 0 {
-            info!(
-                "Full Materialization time: {}ms",
-                timer.elapsed().as_millis()
-            );
-        }
+        let full_mat_time = timer.elapsed().as_millis();
+        info!(
+            "Worker {}\t Full Materialization time: {}ms",
+            index, full_mat_time,
+        );
+        timer = std::time::Instant::now();
 
-        args.lock()
-            .unwrap()
-            .output_folder
-            .push(format!("full_materialization_worker{}.nt", index));
+        let mut output = args.output_folder.clone();
+        output.push(format!("full_materialization_worker{}.nt", index));
 
-        let mut locked = args.lock().unwrap();
-        let output_path = locked.output_folder.to_owned();
-        // Restore path
-        locked.output_folder.pop();
-        std::mem::drop(locked);
-
+        // This is basically not parallel since it locks the encoder during the execution of the
+        // function
         save_to_file_through_trace::<E, _, _, _>(
-            &encoder.lock().unwrap().get_map().as_ref().unwrap(),
-            output_path.as_path(),
+            &safe_encoder.get_map().as_ref().unwrap(),
+            output.as_path(),
             &mut result_trace,
             1,
         );
 
-        if index == 0 {
-            info!(
-                "Saving to file time [Full Materialization]: {}ms",
-                timer.elapsed().as_millis(),
-            );
-        }
+        let save_persistent_time = timer.elapsed().as_millis();
+        info!(
+            "Worker {}\t Saving to file time [Full Materialization]: {}ms",
+            index, save_persistent_time,
+        );
+        timer = Instant::now();
+
+        let full_mat_stats = Statistics {
+            load_time,
+            mat_time: full_mat_time,
+            save_persistent_time,
+        };
+
+        full_mat_stats.write_to_file(args.output_folder.clone(), Some(index), Some(peers));
 
         // There is a `big` limit here. Dataflow Computation works great for applications where
         // all the data are the same. S(ame)IMD, sort of speaking. In our case we have T-Box triples that are different
@@ -267,36 +330,22 @@ where
         // [IMPROVEMENT]
         // What about a data structure shared by all the workers where all the t-box triples are
         // stored only once?
-        let locked = args.lock().unwrap();
-        let mut thread_safe = vec![];
 
-        for (path, a, b) in locked.incremental_file_paths.iter() {
-            thread_safe.push((path.to_owned(), a.to_owned(), b.to_owned()));
-        }
-
-        std::mem::drop(locked);
-
-        for (i, (path, mode, t)) in thread_safe.iter().enumerate() {
+        for (i, (path, mode, t)) in update_paths.clone().iter().enumerate() {
             let data = match t {
-                IncrementalType::TBox => encoder.lock().unwrap().encode(path.as_path(), None, None),
+                IncrementalType::TBox => E::load_encoded_from_persistent(path.clone(), None, None),
                 IncrementalType::ABox => {
-                    encoder
-                        .lock()
-                        .unwrap()
-                        .encode(path.as_path(), Some(index), Some(peers))
+                    E::load_encoded_from_persistent(path, Some(index), Some(peers))
                 }
             };
-            // [IMPROVEMENT]:
-            // Here we are considering only the worker with index 0.. maybe an averatge among all the
-            // workers?
-            if index == 0 {
-                info!(
-                    "Update #{} Load time: {}ms",
-                    i + 1,
-                    timer.elapsed().as_millis()
-                );
-                timer = std::time::Instant::now();
-            }
+            let load_time = timer.elapsed().as_millis();
+            info!(
+                "Worker {}\t Update #{} Load time: {}ms",
+                index,
+                i + 1,
+                load_time,
+            );
+            timer = std::time::Instant::now();
 
             match mode {
                 IncrementalMode::Addition => add_data::<E, _, _>(data, &mut data_input, 2 + i),
@@ -306,40 +355,49 @@ where
             while probe.less_than(data_input.time()) {
                 worker.step();
             }
+            let mat_time = timer.elapsed().as_millis();
+            info!(
+                "Worker {}\t Update #{} Update time: {}ms",
+                index,
+                i + 1,
+                mat_time,
+            );
 
-            if index == 0 {
-                info!(
-                    "Update #{} Update Time: {}ms",
-                    i + 1,
-                    timer.elapsed().as_millis()
-                );
+            timer = std::time::Instant::now();
 
-                timer = std::time::Instant::now();
-            }
-
-            let locked = args.lock().unwrap();
-            let mut path = locked.output_folder.to_owned();
-            std::mem::drop(locked);
-            path.push(&format!("incremental_materialization_{}_worker{}.nt", i + 1, index)[..]);
+            let mut changed_path = args.output_folder.to_owned();
+            changed_path
+                .push(&format!("incremental_materialization_{}_worker{}.nt", i + 1, index)[..]);
 
             save_to_file_through_trace::<E, _, _, _>(
-                &encoder.lock().unwrap().get_map().as_ref().unwrap(),
-                path,
+                &safe_encoder.get_map().as_ref().unwrap(),
+                changed_path,
                 &mut result_trace,
                 2 + i,
             );
+            let save_persistent_time = timer.elapsed().as_millis();
+            info!(
+                "Worker {}\t Update #{} Save to File Time: {}ms",
+                index,
+                i + 1,
+                save_persistent_time,
+            );
+            timer = std::time::Instant::now();
 
-            if index == 0 {
-                info!(
-                    "Update #{} Save to File Time: {}ms",
-                    i + 1,
-                    timer.elapsed().as_millis()
-                );
+            let increm_stats = Statistics {
+                load_time,
+                mat_time,
+                save_persistent_time,
+            };
 
-                timer = std::time::Instant::now();
-            }
+            let mut update_stats_path = std::path::PathBuf::from(path);
+            update_stats_path.pop();
+            increm_stats.write_to_file(update_stats_path, Some(index), Some(peers))
         }
-    })?;
+    })?
+    // Main thread waits for all the workers to finish job so this guarantees that the evaluation
+    // has been written and the main function can proceed an process them.
+    .join();
 
     Ok(())
 }
@@ -359,7 +417,7 @@ impl Iterator for TimelyParams {
     }
 }
 
-fn get_timely_args(args: &Args) -> Vec<String> {
+fn get_timely_args(args: std::sync::Arc<Args>) -> Vec<String> {
     let mut result = vec![];
     result.push("useless".to_string());
     if let Some(w) = args.workers {
@@ -517,8 +575,7 @@ pub fn save_to_file_through_trace<E, K, V, W: AsRef<std::path::Path>>(
                     let s = map.get_left(key.s()).expect("Could not find the subject");
                     let p = map.get_left(key.p()).expect("Could not find the property");
                     let o = map.get_left(key.o()).expect("Could not find the object");
-                    if let Err(e) = writeln!(full_materialization_file, "<{}> <{}> <{}> .", s, p, o)
-                    {
+                    if let Err(e) = writeln!(full_materialization_file, "{} {} {} .", s, p, o) {
                         panic!("Couldn't write to file: {}", e);
                     }
                 }
@@ -530,32 +587,6 @@ pub fn save_to_file_through_trace<E, K, V, W: AsRef<std::path::Path>>(
         println!("COULDN'T GET CURSOR");
     }
 }
-
-/*
-/// Save the full materialization fo file
-pub fn save_to_file_through_trace<E, K, V>(
-    path: &str,
-    trace: &mut TraceAgent<
-        OrdKeySpine<
-            <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item,
-            usize,
-            isize,
-        >,
-    >,
-    time: usize,
-) where
-    E: Encoder<K, V>,
-    E::EncodedDataSet: std::iter::Iterator,
-    <<E as encoder::Encoder<K, V>>::EncodedDataSet as std::iter::Iterator>::Item:
-        std::fmt::Debug + Clone + Ord + 'static,
-    // [IMPROVEMENT]:
-    // Try to understand why V has to be 'static and think of the impact that
-    // a static V has on performance.
-    V: std::cmp::Eq + std::hash::Hash,
-    K: std::cmp::Eq + std::hash::Hash,
-{
-
-*/
 
 /// Saves the fragment of the materialization related to a worker in a vector so that it can be joined to create
 /// the full file. TODO: IS THIS A LITTLE EXPENSIVE
@@ -632,76 +663,6 @@ pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
                 }
             }
         }
-    }
-}
-
-/// outputs to file the results of the timely computation
-pub fn save_stat_to_file(mat_path: &str, stat_path: &str, stats: Vec<model::Statistics>) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
-    let mut load_times: Vec<u128> = vec![];
-    let mut mat_times: Vec<u128> = vec![];
-    let mut mat_to_vec_times: Vec<u128> = vec![];
-
-    let mut mat_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(mat_path)
-        .expect("Something wrong happened with the ouput file");
-
-    let save_time = std::time::Instant::now();
-    for stat in &stats {
-        if let Some(vec) = &stat.mat {
-            for string in vec {
-                // println!("{}", string);
-                if let Err(e) = writeln!(mat_file, "{}", string) {
-                    eprintln!("Couldn't write to file: {}", e);
-                }
-            }
-        }
-    }
-
-    let time_to_save_mat = save_time.elapsed().as_nanos();
-
-    for stat in stats {
-        load_times.push(stat.load_time);
-        mat_times.push(stat.mat_time);
-        mat_to_vec_times.push(stat.mat_to_vec_time);
-    }
-
-    let load_time = load_times.iter().max().expect("No max found");
-    let mat_time = mat_times.iter().max().expect("No max found");
-    let mat_to_vec_time = mat_to_vec_times.iter().max().expect("No max found");
-    // I don't believe this is ever going to overflow u128..
-    let total_time_to_save = time_to_save_mat + mat_to_vec_time;
-
-
-    let mut stat_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .append(true)
-        .create(true)
-        .open(stat_path)
-        .expect("Something wrong happened with the ouput file");
-
-    // Here we initialize the empty file with a directory saying what the columns are
-    let metadata = std::fs::metadata(stat_path).expect("Could not get metadata");
-    if metadata.len() == 0 {
-        if let Err(e) = writeln!(stat_file, "Load Time,Materialization Time,Time to save to file") {
-            eprintln!("Couldn't write to file: {}", e);
-        }
-    }
-
-    println!("Load Time: {}", load_time);
-    println!("Materialization Time: {}", mat_time);
-    println!("Time to save to file: {}", total_time_to_save);
-
-    let string = format!("{},{},{}", load_time, mat_time, total_time_to_save);
-    if let Err(e) = writeln!(stat_file, "{}", string) {
-        eprintln!("Couldn't write to file: {}", e);
     }
 }
 */

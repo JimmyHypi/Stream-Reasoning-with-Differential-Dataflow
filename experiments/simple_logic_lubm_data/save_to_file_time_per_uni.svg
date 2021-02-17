@@ -1,0 +1,77 @@
+<svg viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(72, 364)">
+<g>
+<g>
+<path d="M0,-75.56934 L0,-75.56934 L53.333332,-93.375916 L106.666664,-115.33942 L160,-131.5949 L213.33333,-153.37227 L480,-264.43066" fill="none" stroke="#808000" stroke-linejoin="miter" stroke-width="1"/>
+</g>
+<g>
+<circle cx="0" cy="-75.56934306569343" fill="#808000" r="5"/>
+<circle cx="53.333333333333336" cy="-93.37591240875912" fill="#808000" r="5"/>
+<circle cx="106.66666666666667" cy="-115.33941605839416" fill="#808000" r="5"/>
+<circle cx="160" cy="-131.59489051094891" fill="#808000" r="5"/>
+<circle cx="213.33333333333334" cy="-153.37226277372264" fill="#808000" r="5"/>
+<circle cx="480" cy="-264.43065693430657" fill="#808000" r="5"/>
+</g>
+</g>
+<g>
+<g>
+<line stroke="black" stroke-width="1" x1="0" x2="0" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="106.66666666666667" x2="106.66666666666667" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="213.33333333333334" x2="213.33333333333334" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="320" x2="320" y1="0" y2="10"/>
+<line stroke="black" stroke-width="1" x1="426.6666666666667" x2="426.6666666666667" y1="0" y2="10"/>
+</g>
+<line stroke="black" stroke-width="1" x1="0" x2="480" y1="0" y2="0"/>
+<g>
+<text font-size="12" text-anchor="middle" x="0" y="20">
+1
+</text>
+<text font-size="12" text-anchor="middle" x="106.66666666666667" y="20">
+3
+</text>
+<text font-size="12" text-anchor="middle" x="213.33333333333334" y="20">
+5
+</text>
+<text font-size="12" text-anchor="middle" x="320" y="20">
+7
+</text>
+<text font-size="12" text-anchor="middle" x="426.6666666666667" y="20">
+9
+</text>
+</g>
+<text font-size="12" text-anchor="middle" x="240" y="30">
+Universities
+</text>
+</g>
+<g>
+<g>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-58.44525547445255" y2="-58.44525547445255"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-120.48905109489051" y2="-120.48905109489051"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-182.53284671532847" y2="-182.53284671532847"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-244.57664233576642" y2="-244.57664233576642"/>
+<line stroke="black" stroke-width="1" x1="0" x2="-10" y1="-306.6204379562044" y2="-306.6204379562044"/>
+</g>
+<line stroke="black" stroke-width="1" x1="0" x2="0" y1="0" y2="-340"/>
+<g>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-58.44525547445255">
+0
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-120.48905109489051">
+1000
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-182.53284671532847">
+2000
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-244.57664233576642">
+3000
+</text>
+<text dominant-baseline="middle" font-size="12" text-anchor="end" x="-15" y="-306.6204379562044">
+4000
+</text>
+</g>
+<text font-size="12" text-anchor="middle" transform="rotate(-90 -48 -170)" x="-48" y="-182">
+Save to File Time (ms)
+</text>
+</g>
+</g>
+</svg>

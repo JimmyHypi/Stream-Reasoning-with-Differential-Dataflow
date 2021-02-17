@@ -30,6 +30,6 @@ impl ParserTrait<Arc<String>> for NTriplesParser {
     fn parse_triple(&mut self, input: &str) -> Self::TripleType {
         self.lalrpop_parser
             .parse(input)
-            .expect("FAILED TO PARSE TRIPLE")
+            .expect(format!("FAILED TO PARSE TRIPLE: {}", input).as_str())
     }
 }

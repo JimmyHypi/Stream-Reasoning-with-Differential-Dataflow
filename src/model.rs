@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 //! Model
 use abomonation_derive::Abomonation;
+
 /// This struct represents an RDF triple
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Ord, PartialOrd, Abomonation)]
 pub struct Triple {
@@ -15,15 +16,15 @@ pub struct Triple {
 }
 
 /// URI of the rdfs:subClassOf
-pub static RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+pub static RDFS_SUB_CLASS_OF: &str = "<http://www.w3.org/2000/01/rdf-schema#subClassOf>";
 /// URI of the rdfs:subPropertyOf
-pub static RDFS_SUB_PROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+pub static RDFS_SUB_PROPERTY_OF: &str = "<http://www.w3.org/2000/01/rdf-schema#subPropertyOf>";
 /// URI of the rdfs::domain
-pub static RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
+pub static RDFS_DOMAIN: &str = "<http://www.w3.org/2000/01/rdf-schema#domain>";
 /// URI of the rdfs::range
-pub static RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+pub static RDFS_RANGE: &str = "<http://www.w3.org/2000/01/rdf-schema#range>";
 /// URI of rdf:type
-pub static RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+pub static RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 
 impl Triple {
     /// Prints only the local name with no namespace, just for easy reading
@@ -157,56 +158,6 @@ impl std::fmt::Display for RhoDFWord {
             RhoDFWord::TYPE => write!(f, "TYPE"),
             RhoDFWord::DOMAIN => write!(f, "DOMAIN"),
             RhoDFWord::RANGE => write!(f, "RANGE"),
-        }
-    }
-}
-
-#[derive(Debug)]
-/// Contains full materialization statistics
-pub struct Statistics {
-    /// load time
-    pub load_time: u128,
-    /// full materialization time, just to record multiple runs to average out the full mat time
-    pub mat_time: u128,
-    /// full materialization time to save from trace to vec, to be joined in the main thread
-    pub mat_to_vec_time: u128,
-    /// full materialization
-    pub mat: Option<Vec<String>>,
-}
-
-impl Statistics {
-    /// initialize an empty statistics struct
-    pub fn new() -> Self {
-        Statistics {
-            load_time: 0,
-            mat_time: 0,
-            mat_to_vec_time: 0,
-            mat: None,
-        }
-    }
-}
-
-#[derive(Debug)]
-/// Contains inc materialization statistics
-pub struct IncrMatStatistics {
-    /// time to upload the triples in the update
-    pub update_load_time: u128,
-    /// update materialization time
-    pub update_mat_time: u128,
-    /// update time from trace to vec, to be joined in the main thread
-    pub update_mat_to_vec_time: u128,
-    /// the incremental materialization
-    pub update_mat: Option<Vec<String>>,
-}
-
-impl IncrMatStatistics {
-    /// initialize an empty statistics struct
-    pub fn new() -> Self {
-        IncrMatStatistics {
-            update_load_time: 0,
-            update_mat_time: 0,
-            update_mat_to_vec_time: 0,
-            update_mat: None,
         }
     }
 }
