@@ -99,6 +99,7 @@ where
             .open(&output_path)
             // Instead of expecting return a Result<()>
             .expect("Something wrong happened with the ouput file");
+
         for elem in dataset {
             if let Err(e) = writeln!(full_materialization_file, "{:?}", elem) {
                 panic!("Couldn't write to file: {}", e);

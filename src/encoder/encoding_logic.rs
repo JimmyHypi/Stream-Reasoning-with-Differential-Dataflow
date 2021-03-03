@@ -10,7 +10,7 @@ pub trait StatelessEncodingLogic<K, V>: Send + Sync {
 
 use std::sync::Arc;
 
-pub struct StatelessSimpleLogic {}
+/*pub struct StatelessSimpleLogic {}
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -27,6 +27,7 @@ impl StatelessEncodingLogic<Arc<String>, u64> for StatelessSimpleLogic {
         hasher.finish()
     }
 }
+*/
 
 // This implements a stateful simple logic. This is needed for comparison between the stateless
 // approach. I want to favor the stateless approach withouth discarding the stateful option

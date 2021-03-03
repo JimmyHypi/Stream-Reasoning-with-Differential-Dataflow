@@ -93,6 +93,7 @@ pub enum IncrementalType {
     ABox,
     TBox,
 }
+
 // [IMPROVEMENT]:
 // Error Handling.
 // This should go in its own module
@@ -148,6 +149,49 @@ impl std::str::FromStr for IncrementalType {
         }
     }
 }
+
+fn write_encoding_time(path: std::path::PathBuf, time: u128) {
+    let mut path = path.clone();
+    path.pop();
+    path.push("encoded_data/encoding_stats");
+    let mut file = crate::eval::open_append(path.clone());
+
+    let metadata = std::fs::metadata(path.clone()).expect("Could not get metadata");
+    // If the file is empty it means that it's the first iteration, we want
+    // to append new results to previous results so to have more data to analyze
+    if metadata.len() == 0 {
+        writeln!(file, "Encoding Time (ms)").expect("Invalid File Path");
+    }
+    writeln!(file, "{}", time).expect("Could not write encoding time");
+
+    let avg_encoding_time = get_avg_encoding_time(path.clone());
+
+    path.pop();
+    path.push("average_encoding_time");
+    let mut file = crate::eval::open_truncate(path);
+    writeln!(file, "Average Encoding Time (ms)\n{}", avg_encoding_time)
+        .expect("Could not write average encoding time");
+}
+
+use std::io::BufRead;
+fn get_avg_encoding_time(path: std::path::PathBuf) -> f64 {
+    let file = std::fs::File::open(path).expect("Could not open file");
+    let reader = std::io::BufReader::new(file);
+    let lines = reader.lines().skip(1);
+
+    let mut count: usize = 0;
+    let mut sum: usize = 0;
+
+    for line in lines {
+        count += 1;
+        let line = line.expect("Could not read line!");
+        let parsed = line.parse::<usize>().expect("Could not parse to usize");
+        sum += parsed;
+    }
+
+    sum as f64 / count as f64
+}
+
 pub fn run_materialization<L, R, E, P, F, M>(
     mut encoder: EncoderUnit<L, R, E, P, F>,
     materialization: M,
@@ -216,19 +260,17 @@ where
     let mut start = Instant::now();
 
     let t_box_encoded_path = encoder.encode_persistent(args.t_box_path.clone(), None, None);
-    info!(
-        "Persistent Encoding of TBox: {}ms",
-        start.elapsed().as_millis()
-    );
-    start = Instant::now();
+    let encoding_time_tbox = start.elapsed().as_millis();
+    info!("Persistent Encoding of TBox: {}ms", encoding_time_tbox);
+    write_encoding_time(args.t_box_path.clone(), encoding_time_tbox);
 
+    start = Instant::now();
     let a_box_encoded_path = encoder.encode_persistent(args.a_box_path.clone(), None, None);
-    info!(
-        "Persistent Encoding of ABox: {}ms",
-        start.elapsed().as_millis()
-    );
-    start = Instant::now();
+    let encoding_time_abox = start.elapsed().as_millis();
+    info!("Persistent Encoding of ABox: {}ms", encoding_time_abox);
+    write_encoding_time(args.a_box_path.clone(), encoding_time_abox);
 
+    start = Instant::now();
     // Get the encoding of the constant
     let rdfs_keywords = [
         *encoder.get_right_from_map(L::from(String::from(RDFS_SUB_CLASS_OF))),
@@ -241,13 +283,14 @@ where
     let mut update_paths = vec![];
 
     for (i, (path, a, b)) in args.incremental_file_paths.iter().enumerate() {
-        let update_path = encoder.encode_persistent(path.to_owned(), None, None);
+        let update_path = encoder.encode_persistent(path.clone(), None, None);
+        let update_encoding_time = start.elapsed().as_millis();
 
         info!(
             "Persistent Encoding of Update #{}: {}ms",
-            i,
-            start.elapsed().as_millis()
+            i, update_encoding_time,
         );
+        write_encoding_time(path.clone(), update_encoding_time);
         start = Instant::now();
 
         update_paths.push((update_path, a.to_owned(), b.to_owned()));
@@ -638,34 +681,6 @@ where
 
     res
 }
-/*
-/// Concatenates the different fragments into the final file
-pub fn save_concatenate(path: &str, result: Vec<Result<Vec<String>, String>>) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
-    let mut del_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)
-        .expect("Something wrong happened with the ouput file");
-    // In case we already have it let's erase it and resave it instead of reconcatenating the whole thing
-    // del_file.set_len(0).expect("Unable to reset file");
-
-    for i in 0..result.len() {
-        if let Some(Ok(vec)) = result.get(i) {
-            for elem in vec {
-                // println!("{}", elem);
-                if let Err(e) = writeln!(del_file, "{}", elem) {
-                    eprintln!("Couldn't write to file: {}", e);
-                }
-            }
-        }
-    }
-}
-*/
 
 #[cfg(test)]
 mod tests {

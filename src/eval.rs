@@ -33,7 +33,7 @@ impl Statistics {
         // If the file is empty it means that it's the first iteration, we want
         // to append new results to previous results so to have more data to analyze
         if metadata.len() == 0 {
-            writeln!(file, "Load Time, Materialization, Save to File Time")
+            writeln!(file, "Load Time, Materialization, Save to File Time (ms)")
                 .expect("Invalid File Path");
         }
 
@@ -263,11 +263,11 @@ fn write_best_results<P: AsRef<Path>>(path: P, res: (f64, usize)) {
     // files for an easier parsing from client
     let mut file = open_truncate(path);
 
-    writeln!(file, "Number of Workers, Time\n{}, {}", res.1, res.0)
+    writeln!(file, "Number of Workers, Time (ms)\n{}, {}", res.1, res.0)
         .expect("Could not write best load to file");
 }
 
-fn open_truncate<P: AsRef<Path>>(path: P) -> std::fs::File {
+pub fn open_truncate<P: AsRef<Path>>(path: P) -> std::fs::File {
     OpenOptions::new()
         .read(true)
         .write(true)
@@ -277,7 +277,7 @@ fn open_truncate<P: AsRef<Path>>(path: P) -> std::fs::File {
         // Instead of expecting return a Result<()>
         .expect("Something wrong happened with the ouput file")
 }
-fn open_append<P: AsRef<Path>>(path: P) -> std::fs::File {
+pub fn open_append<P: AsRef<Path>>(path: P) -> std::fs::File {
     OpenOptions::new()
         .read(true)
         .write(true)

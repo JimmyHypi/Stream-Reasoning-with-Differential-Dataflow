@@ -374,6 +374,8 @@ use walkdir::WalkDir;
 /// 3) Best save to file time per number of unversities
 pub fn plot_uni_graph() {
     let mut data: [Vec<(f64, f64)>; 3] = [vec![], vec![], vec![]];
+    let mut encoding_data: Vec<(f64, f64)> = vec![];
+    let mut throughput_per_uni: [Vec<(f64, f64)>; 4] = [vec![], vec![], vec![], vec![]];
 
     let args = Args::from_args();
 
@@ -391,20 +393,35 @@ pub fn plot_uni_graph() {
                 .expect("Could not get filename")
                 .to_str();
             if is_uni_folder(file_name.expect("Could not convert to string.")) {
-                get_uni_data(entry.path().to_path_buf(), &mut data);
+                get_uni_data(
+                    entry.clone().path().to_path_buf(),
+                    &mut data,
+                    &mut encoding_data,
+                    &mut throughput_per_uni,
+                );
             }
         }
     }
-
     // The reasoning_service system saves the best data in the universities_x/output/stats under
     // load_best.txt, meaterialization_best.txt, save_to_file_best.txt. The first line tells you
     // the meaning of the data and the second line is the data: `number of workers, time`.
     let mut plotter = Plotter::new();
 
+    let (encoding_time_min_val, encoding_time_max_val) = get_ends(&mut encoding_data);
     let (load_time_min_val, load_time_max_val) = get_ends(&mut data[0]);
     let (mat_time_min_val, mat_time_max_val) = get_ends(&mut data[1]);
     let (save_to_file_time_min_val, save_to_file_time_max_val) = get_ends(&mut data[2]);
+    let (encoding_throughput_min_val, encoding_throughput_max_val) =
+        get_ends(&mut throughput_per_uni[0]);
+    let (load_throughput_min_val, load_throughput_max_val) = get_ends(&mut throughput_per_uni[1]);
+    let (mat_throughput_min_val, mat_throughput_max_val) = get_ends(&mut throughput_per_uni[2]);
+    let (sft_throughput_min_val, sft_throughput_max_val) = get_ends(&mut throughput_per_uni[3]);
 
+    let encoding_y_range = reasoning_service::eval::compute_axis_range(
+        encoding_time_min_val,
+        encoding_time_max_val,
+        0.4,
+    );
     let load_y_range =
         reasoning_service::eval::compute_axis_range(load_time_min_val, load_time_max_val, 0.4);
     let mat_y_range =
@@ -415,13 +432,48 @@ pub fn plot_uni_graph() {
         0.4,
     );
 
+    let t_encoding_y_range = reasoning_service::eval::compute_axis_range(
+        encoding_throughput_min_val,
+        encoding_throughput_max_val,
+        1.0,
+    );
+    let t_load_y_range = reasoning_service::eval::compute_axis_range(
+        load_throughput_min_val,
+        load_throughput_max_val,
+        1.0,
+    );
+    let t_mat_y_range = reasoning_service::eval::compute_axis_range(
+        mat_throughput_min_val,
+        mat_throughput_max_val,
+        1.0,
+    );
+    let t_sft_y_range = reasoning_service::eval::compute_axis_range(
+        sft_throughput_min_val,
+        sft_throughput_max_val,
+        1.0,
+    );
+
     data[0].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
     data[1].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
     data[2].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    encoding_data.sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    throughput_per_uni[0]
+        .sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    throughput_per_uni[1]
+        .sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    throughput_per_uni[2]
+        .sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    throughput_per_uni[3]
+        .sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
 
     let load_time_plot = plotter.generate_plot(data[0].to_owned());
     let mat_time_plot = plotter.generate_plot(data[1].to_owned());
     let save_to_file_time_plot = plotter.generate_plot(data[2].to_owned());
+    let encoding_time_plot = plotter.generate_plot(encoding_data.to_owned());
+    let encoding_throughput_plot = plotter.generate_plot(throughput_per_uni[0].to_owned());
+    let load_throughput_plot = plotter.generate_plot(throughput_per_uni[1].to_owned());
+    let mat_throughput_plot = plotter.generate_plot(throughput_per_uni[2].to_owned());
+    let sft_throughput_plot = plotter.generate_plot(throughput_per_uni[3].to_owned());
 
     let load_plot_info = PlotInfo {
         x_range: None,
@@ -433,15 +485,44 @@ pub fn plot_uni_graph() {
         x_range: None,
         y_range: Some(mat_y_range),
         x_label: "Universities",
-        y_label: "Materialization Time (ms)",
+        y_label: "Materialization Time (s)",
     };
     let save_to_file_plot_info = PlotInfo {
         x_range: None,
         y_range: Some(save_to_file_y_range),
         x_label: "Universities",
-        y_label: "Save to File Time (ms)",
+        y_label: "Save to File Time (s)",
     };
-
+    let encoding_plot_info = PlotInfo {
+        x_range: None,
+        y_range: Some(encoding_y_range),
+        x_label: "Universities",
+        y_label: "Encoding Time (s)",
+    };
+    let encoding_throughput_plot_info = PlotInfo {
+        x_range: None,
+        y_range: Some(t_encoding_y_range),
+        x_label: "Universities",
+        y_label: "Throughput (KTriples/s)",
+    };
+    let load_throughput_plot_info = PlotInfo {
+        x_range: None,
+        y_range: Some(t_load_y_range),
+        x_label: "Universities",
+        y_label: "Throughput (KTriples/s)",
+    };
+    let mat_throughput_plot_info = PlotInfo {
+        x_range: None,
+        y_range: Some(t_mat_y_range),
+        x_label: "Universities",
+        y_label: "Throughput (KTriples/s)",
+    };
+    let sft_throughput_plot_info = PlotInfo {
+        x_range: None,
+        y_range: Some(t_sft_y_range),
+        x_label: "Universities",
+        y_label: "Throughput (KTriples/s)",
+    };
     plotter.save_plot(
         "load_time_per_uni.svg",
         vec![load_time_plot],
@@ -453,6 +534,31 @@ pub fn plot_uni_graph() {
         vec![save_to_file_time_plot],
         save_to_file_plot_info,
     );
+    plotter.save_plot(
+        "encoding_time_per_uni.svg",
+        vec![encoding_time_plot],
+        encoding_plot_info,
+    );
+    plotter.save_plot(
+        "encoding_throughput_per_uni.svg",
+        vec![encoding_throughput_plot],
+        encoding_throughput_plot_info,
+    );
+    plotter.save_plot(
+        "load_throughput_per_uni.svg",
+        vec![load_throughput_plot],
+        load_throughput_plot_info,
+    );
+    plotter.save_plot(
+        "mat_throughput_per_uni.svg",
+        vec![mat_throughput_plot],
+        mat_throughput_plot_info,
+    );
+    plotter.save_plot(
+        "save_to_file_throughput_per_uni.svg",
+        vec![sft_throughput_plot],
+        sft_throughput_plot_info,
+    );
 }
 
 fn get_ends(vec: &mut Vec<(f64, f64)>) -> (f64, f64) {
@@ -460,6 +566,7 @@ fn get_ends(vec: &mut Vec<(f64, f64)>) -> (f64, f64) {
     let len = vec.len();
     (vec[0].1, vec[len - 1].1)
 }
+
 fn is_uni_folder(folder: &str) -> bool {
     let index = if let Some(index) = folder.find('_') {
         index
@@ -469,10 +576,21 @@ fn is_uni_folder(folder: &str) -> bool {
     "universities" == &folder[0..index]
 }
 
-fn get_uni_data(folder_path: std::path::PathBuf, vec_array: &mut [Vec<(f64, f64)>; 3]) {
+fn get_uni_data(
+    folder_path: std::path::PathBuf,
+    vec_array: &mut [Vec<(f64, f64)>; 3],
+    encoding_data: &mut Vec<(f64, f64)>,
+    data_for_throughput: &mut [Vec<(f64, f64)>; 4],
+) {
+    let mut encoded_data_folder = folder_path.clone();
     let mut stats_folder = folder_path.clone();
-    stats_folder.push("output/stats");
+    let mut universities_file = folder_path.clone();
 
+    universities_file.push("Universities.nt");
+    stats_folder.push("output/stats");
+    encoded_data_folder.push("encoded_data");
+
+    let encoding_stats = get_encoding_data(&encoded_data_folder, "average_encoding_time");
     let load_time = get_data(&stats_folder, "load_best.txt");
     let mat_time = get_data(&stats_folder, "materialization_best.txt");
     let save_to_file_time = get_data(&stats_folder, "save_to_file_best.txt");
@@ -485,17 +603,62 @@ fn get_uni_data(folder_path: std::path::PathBuf, vec_array: &mut [Vec<(f64, f64)
 
     let number_of_unis = get_number_of_unis(uni_folder_file_name);
 
+    if let Ok(avg) = encoding_stats {
+        let number_of_triples = get_number_of_triples(&universities_file);
+        if let Ok(n) = number_of_triples {
+            data_for_throughput[0].push((number_of_unis as f64, n as f64 / avg));
+        }
+        encoding_data.push((number_of_unis as f64, avg / 1000.0));
+    }
     if let Ok(load_time) = load_time {
+        let number_of_triples = get_number_of_triples(&universities_file);
+        if let Ok(n) = number_of_triples {
+            data_for_throughput[1].push((number_of_unis as f64, n as f64 / load_time));
+        }
         vec_array[0].push((number_of_unis as f64, load_time));
     }
     if let Ok(mat_time) = mat_time {
-        vec_array[1].push((number_of_unis as f64, mat_time));
+        let number_of_triples = get_number_of_triples(&universities_file);
+        if let Ok(n) = number_of_triples {
+            data_for_throughput[2].push((number_of_unis as f64, n as f64 / mat_time));
+        }
+        vec_array[1].push((number_of_unis as f64, mat_time / 1000.0));
     }
     if let Ok(save_to_file_time) = save_to_file_time {
-        vec_array[2].push((number_of_unis as f64, save_to_file_time));
+        let number_of_triples = get_number_of_triples(&universities_file);
+        if let Ok(n) = number_of_triples {
+            data_for_throughput[3].push((number_of_unis as f64, n as f64 / save_to_file_time));
+        }
+        vec_array[2].push((number_of_unis as f64, save_to_file_time / 1000.0));
     }
 }
 
+fn get_number_of_triples(path: &std::path::PathBuf) -> Result<usize, String> {
+    if let Ok(file) = std::fs::File::open(path) {
+        let buf_read = BufReader::new(file);
+        Ok(buf_read.lines().count())
+    } else {
+        return Err("Could not count the number of triples in the file.".to_string());
+    }
+}
+fn get_encoding_data(path: &std::path::PathBuf, file_name: &str) -> Result<f64, String> {
+    let mut p = path.clone();
+    p.push(file_name);
+
+    if let Ok(file) = std::fs::File::open(p) {
+        let buf_read = BufReader::new(file);
+        let mut lines = buf_read.lines().skip(1);
+        let data = lines
+            .next()
+            .expect("Next returned nothing")
+            .expect("Wrong format");
+        Ok(data
+            .parse::<f64>()
+            .expect("Could not parse average encoding time"))
+    } else {
+        return Err("Could not read file".to_string());
+    }
+}
 fn get_data(path: &std::path::PathBuf, file_name: &str) -> Result<f64, String> {
     let mut p = path.clone();
     p.push(file_name);
