@@ -1,2 +1,8 @@
 # Stream-Reasoning-with-Differential-Dataflow
-A stream reasoning service implemented with Rust's framework Differential Dataflow.
+A stream reasoning service implemented with Rust's framework Differential Dataflow. This work represent my thesis project. The main contribution is providing a framework that allows to perform incremental materialization on RDF datasets in Rust using Timely Dataflow. The long-term goal of the system is to make all Rust/Timely Dataflow details hidden to the client that would be able to focus on the RDF materialization only and parsing and encoding procedures. We are still far from achieving that goal, but we are definitely a couple steps closer!
+
+Thanks to the generic interfaces provided, the system can be used for a multitude of purposes. We demonstrate that we can use the system to elegantly develop a reasoner able to perform RDFS reasoning (you can find the code in the [experiments](https://github.com/JimmyHypi/Stream-Reasoning-with-Differential-Dataflow/blob/master/experiments/) folder). You can find [here](https://github.com/JimmyHypi/Stream-Reasoning-with-Differential-Dataflow/blob/master/experiments/simple_logic_lubm_data/HOW_TO.md) a detailed walkthrough on how to use the reasoner. 
+
+This project shows promising results in terms of system engineering and performances, but it is still very early in the development and has multiple things that need to be improved. Soon I expect to write a list of all the TODOs to improve the design and overall performances of the system as well as expanding the possibilities this system can be used for and hopefully reiterate the software development lifecycle until we are able to express the full potential of the system.
+
+For any questions, feel free to post an issue or contact me directly.
