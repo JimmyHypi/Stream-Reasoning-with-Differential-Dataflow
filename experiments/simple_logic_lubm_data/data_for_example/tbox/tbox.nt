@@ -1,0 +1,25 @@
+_:genid3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> _:genid2 .
+_:genid1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Person> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Employee> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Employee> <http://www.w3.org/2000/01/rdf-schema#label> "Employee" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Faculty> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Faculty> <http://www.w3.org/2000/01/rdf-schema#label> "faculty member" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Faculty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Employee> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#FullProfessor> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#FullProfessor> <http://www.w3.org/2000/01/rdf-schema#label> "full professor" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#FullProfessor> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Professor> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Professor> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Professor> <http://www.w3.org/2000/01/rdf-schema#label> "professor" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#Professor> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Faculty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#headOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#headOf> <http://www.w3.org/2000/01/rdf-schema#label> "is the head of" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#headOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#worksFor> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#memberOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#memberOf> <http://www.w3.org/2000/01/rdf-schema#label> "member of" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#worksFor> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#worksFor> <http://www.w3.org/2000/01/rdf-schema#label> "Works For" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#worksFor> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#memberOf> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#teacherOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#teacherOf> <http://www.w3.org/2000/01/rdf-schema#label> "teaches" .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#teacherOf> <http://www.w3.org/2000/01/rdf-schema#domain> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Faculty> .
+<http://swat.cse.lehigh.edu/onto/univ-bench.owl#teacherOf> <http://www.w3.org/2000/01/rdf-schema#range> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#Course> .

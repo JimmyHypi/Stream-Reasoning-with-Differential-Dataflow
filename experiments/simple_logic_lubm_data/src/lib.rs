@@ -360,6 +360,8 @@ where
 }
 
 // Data processing relative to university
+// THIS NEEDS TO ADAPT TO THE NEW WAY THE SYSTEM SAVES THE PERFORMANCE DATA.
+// AS OF RIGHT NOW THIS CANNOT BE USED
 
 use reasoning_service::eval::{PlotInfo, Plotter};
 use reasoning_service::Args;
@@ -376,6 +378,21 @@ pub fn plot_uni_graph() {
     let mut data: [Vec<(f64, f64)>; 3] = [vec![], vec![], vec![]];
     let mut encoding_data: Vec<(f64, f64)> = vec![];
     let mut throughput_per_uni: [Vec<(f64, f64)>; 4] = [vec![], vec![], vec![], vec![]];
+    // 12 updates for the univ-bench benchmark
+    let mut updates_per_uni: [Vec<(f64, f64)>; 12] = [
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ];
 
     let args = Args::from_args();
 
@@ -398,6 +415,7 @@ pub fn plot_uni_graph() {
                     &mut data,
                     &mut encoding_data,
                     &mut throughput_per_uni,
+                    &mut updates_per_uni,
                 );
             }
         }
@@ -416,6 +434,18 @@ pub fn plot_uni_graph() {
     let (load_throughput_min_val, load_throughput_max_val) = get_ends(&mut throughput_per_uni[1]);
     let (mat_throughput_min_val, mat_throughput_max_val) = get_ends(&mut throughput_per_uni[2]);
     let (sft_throughput_min_val, sft_throughput_max_val) = get_ends(&mut throughput_per_uni[3]);
+
+    let mut ends = [(10f64, 10f64); 12];
+
+    for i in 0..12 {
+        ends[i] = get_ends(&mut updates_per_uni[i]);
+    }
+
+    let mut y_range_updates = [(0f64, 0f64); 12];
+
+    for i in 0..12 {
+        y_range_updates[i] = reasoning_service::eval::compute_axis_range(ends[i].0, ends[i].1, 1.6);
+    }
 
     let encoding_y_range = reasoning_service::eval::compute_axis_range(
         encoding_time_min_val,
@@ -453,6 +483,11 @@ pub fn plot_uni_graph() {
         1.0,
     );
 
+    for i in 0..12 {
+        updates_per_uni[i]
+            .sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
+    }
+
     data[0].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
     data[1].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
     data[2].sort_by(|(a, _), (b, _)| a.partial_cmp(b).expect("Tried to compare to Nan"));
@@ -474,6 +509,36 @@ pub fn plot_uni_graph() {
     let load_throughput_plot = plotter.generate_plot(throughput_per_uni[1].to_owned());
     let mat_throughput_plot = plotter.generate_plot(throughput_per_uni[2].to_owned());
     let sft_throughput_plot = plotter.generate_plot(throughput_per_uni[3].to_owned());
+
+    let mut update_plots = [
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+        plotlib::repr::Plot::new(vec![]),
+    ];
+
+    for i in 0..12 {
+        update_plots[i] = plotter.generate_plot(updates_per_uni[i].to_owned());
+    }
+
+    let mut updates_plot_info = [PlotInfo::new(); 12];
+
+    for i in 0..12 {
+        updates_plot_info[i] = PlotInfo {
+            x_range: None,
+            y_range: Some(y_range_updates[i]),
+            x_label: "Universities",
+            y_label: "Materialization Time (ms)",
+        }
+    }
 
     let load_plot_info = PlotInfo {
         x_range: None,
@@ -559,6 +624,27 @@ pub fn plot_uni_graph() {
         vec![sft_throughput_plot],
         sft_throughput_plot_info,
     );
+
+    for i in 0..12 {
+        let name: &str = match i {
+            0 => "add_update1.svg",
+            1 => "add_update2.svg",
+            2 => "add_update3.svg",
+            3 => "add_update4.svg",
+            4 => "add_update5.svg",
+            5 => "add_update6.svg",
+            6 => "remove_update1.svg",
+            7 => "remove_update2.svg",
+            8 => "remove_update3.svg",
+            9 => "remove_update4.svg",
+            10 => "remove_update5.svg",
+            11 => "remove_update6.svg",
+            _ => panic!("You can't be here"),
+        };
+        let mut plot = plotlib::repr::Plot::new(vec![]);
+        std::mem::swap(&mut plot, &mut update_plots[i]);
+        plotter.save_plot(name, vec![plot], updates_plot_info[i]);
+    }
 }
 
 fn get_ends(vec: &mut Vec<(f64, f64)>) -> (f64, f64) {
@@ -581,14 +667,17 @@ fn get_uni_data(
     vec_array: &mut [Vec<(f64, f64)>; 3],
     encoding_data: &mut Vec<(f64, f64)>,
     data_for_throughput: &mut [Vec<(f64, f64)>; 4],
+    updates_data: &mut [Vec<(f64, f64)>; 12],
 ) {
     let mut encoded_data_folder = folder_path.clone();
     let mut stats_folder = folder_path.clone();
     let mut universities_file = folder_path.clone();
+    let mut updates_folder = folder_path.clone();
 
     universities_file.push("Universities.nt");
     stats_folder.push("output/stats");
     encoded_data_folder.push("encoded_data");
+    updates_folder.push("updates");
 
     let encoding_stats = get_encoding_data(&encoded_data_folder, "average_encoding_time");
     let load_time = get_data(&stats_folder, "load_best.txt");
@@ -618,6 +707,7 @@ fn get_uni_data(
         vec_array[0].push((number_of_unis as f64, load_time));
     }
     if let Ok(mat_time) = mat_time {
+        process_updates(updates_folder, updates_data, number_of_unis);
         let number_of_triples = get_number_of_triples(&universities_file);
         if let Ok(n) = number_of_triples {
             data_for_throughput[2].push((number_of_unis as f64, n as f64 / mat_time));
@@ -633,6 +723,76 @@ fn get_uni_data(
     }
 }
 
+fn process_updates(
+    path: std::path::PathBuf,
+    vec: &mut [Vec<(f64, f64)>; 12],
+    number_of_unis: usize,
+) {
+    for folder in WalkDir::new(path.clone()).max_depth(1).min_depth(1) {
+        let folder = folder.expect("Failed to access file in updates path");
+        if folder.path().is_dir() {
+            let file_name = folder
+                .path()
+                .file_name()
+                .expect("Could not get filename")
+                .to_str()
+                .expect("Could not convert to ASCII");
+            if check_name(&file_name) {
+                // go to stats folder and parse and save the best materialization value
+                let index = get_index(&file_name);
+                // println!("{}", index);
+                let mut stats = path.clone();
+                stats.push(format!("{}/stats", file_name));
+                // println!("stats: {:?}", stats);
+                let data = get_data(&stats, "materialization_best.txt")
+                    .expect("Could not read data from updates");
+                // println!("data: {:?}", data);
+                vec[index].push((number_of_unis as f64, data));
+            }
+        }
+    }
+}
+
+fn get_index(file_name: &str) -> usize {
+    let file_name = file_name.trim();
+    let len = file_name.len();
+    if let Ok(parsed) = file_name[len - 1..].parse::<usize>() {
+        if is_add(file_name) {
+            parsed - 1
+        } else {
+            parsed - 1 + 6
+        }
+    } else {
+        if &file_name[len - 1..] == "y" {
+            if is_add(file_name) {
+                4
+            } else {
+                10
+            }
+        } else if &file_name[len - 1..] == "s" {
+            if is_add(file_name) {
+                5
+            } else {
+                11
+            }
+        } else {
+            panic!("You should never be here!");
+        }
+    }
+}
+
+fn check_name(file_name: &str) -> bool {
+    is_add(file_name) || is_remove(file_name)
+}
+fn is_add(file_name: &str) -> bool {
+    &file_name.trim()[0..3] == "add"
+}
+fn is_remove(file_name: &str) -> bool {
+    &file_name.trim()[0..6] == "remove"
+}
+
+// This requires the full scan of the document. File metadata expresses length of the file in
+// bytes. Not sure if there's a way to get the number of lines from that. Most likely not.
 fn get_number_of_triples(path: &std::path::PathBuf) -> Result<usize, String> {
     if let Ok(file) = std::fs::File::open(path) {
         let buf_read = BufReader::new(file);
