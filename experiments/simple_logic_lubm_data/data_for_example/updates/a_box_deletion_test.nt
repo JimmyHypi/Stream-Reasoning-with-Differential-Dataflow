@@ -1,1 +1,2 @@
 <http://www.Department0.University0.edu/FullProfessor7> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#headOf> <http://www.Department0.University0.edu> .
+<http://www.Department0.University0.edu/FullProfessor7> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#FullProfessor> .

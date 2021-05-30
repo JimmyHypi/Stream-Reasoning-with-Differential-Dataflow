@@ -1,4 +1,3 @@
 <http://www.Department0.University0.edu/FullProfessor8> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#headOf> <http://www.Department0.University1.edu> .
 <http://www.Department0.University0.edu/FullProfessor8> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#FullProfessor> .
 <http://www.Department0.University0.edu/FullProfessor8> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#teacherOf> <http://www.Department0.University0.edu/Course11> .
-<http://www.Department0.University0.edu/ComputerScientist0> <http://swat.cse.lehigh.edu/onto/univ-bench.owl#csUsedTo> <http://www.Department0.University0.edu/Computer0> .

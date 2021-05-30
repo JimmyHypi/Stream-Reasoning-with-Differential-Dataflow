@@ -373,6 +373,7 @@ fn get_averaged_data<W: AsRef<Path>>(path: W) -> (f64, f64, f64) {
     )
 }
 
+/*
 fn locate_stats_folder(output_path: PathBuf, update: bool) -> Result<PathBuf, String> {
     // Locate stats directory
     let mut stats_path = output_path.clone();
@@ -390,6 +391,7 @@ fn locate_stats_folder(output_path: PathBuf, update: bool) -> Result<PathBuf, St
         Err("Could not find stats file".to_string())
     }
 }
+*/
 
 #[derive(Copy, Clone)]
 pub struct PlotInfo<'a> {

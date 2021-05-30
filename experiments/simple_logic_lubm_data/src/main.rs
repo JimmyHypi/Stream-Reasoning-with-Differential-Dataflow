@@ -1,7 +1,4 @@
 use reasoning_service::encoder::{BiMapEncoder, EncoderUnit, NTriplesParser, SimpleLogic};
-use reasoning_service::eval::output_figures;
-use reasoning_service::Args;
-use structopt::StructOpt;
 
 fn main() {
     env_logger::init();
