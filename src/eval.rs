@@ -20,8 +20,6 @@ impl Statistics {
         let peers = peers.unwrap_or(1);
         let index = index.unwrap_or(0);
 
-        // Create encoded_data/ directory
-        path_buf.pop();
         path_buf.push(format!("stats/peers{}/", peers).as_str());
         std::fs::create_dir_all(path_buf.clone())
             .expect("Could not create `stats/peers/` directory");
@@ -59,7 +57,10 @@ use walkdir::WalkDir;
 // Assumption: all statistics are saved in the output/stats folder. The input is the output
 // directory. The function will look for that specific folder.
 pub fn output_figures(output_path: PathBuf) {
-    let stats_path = locate_stats_folder(output_path.clone()).expect("Could not find stats folder");
+    // let stats_path =
+    // locate_stats_folder(output_path.clone(), false).expect("Could not find stats folder");
+    // println!("stats_path: {:?}", stats_path);
+    let stats_path = output_path.clone();
 
     let mut load_time_per_peers: Vec<(f64, f64)> = vec![];
     let mut mat_time_per_peers: Vec<(f64, f64)> = vec![];
@@ -76,9 +77,9 @@ pub fn output_figures(output_path: PathBuf) {
     // Each directory correspond to the computation data for a determined amount of workers.
     // The convention has the folder named peersX where X is the number of total workers for easy
     // parsing. So for each directory:
-    for entry in WalkDir::new(stats_path.clone()).min_depth(1).max_depth(1) {
+    for entry in WalkDir::new(output_path.clone()).min_depth(1).max_depth(1) {
         let entry = entry.expect("Failed to read file in stats path");
-        if entry.path().is_dir() {
+        if entry.path().is_dir() && is_peers_folder(&entry.path()) {
             // The convention calls the folder "peersX" so we need to skip "peers" to get to the number
             // of peers
             let peers_number = peers_from_file(&entry);
@@ -181,11 +182,17 @@ pub fn output_figures(output_path: PathBuf) {
     let mat_best = (mat_time_min_val, mat_peers);
     let sft_best = (save_to_file_time_min_val, sft_peers);
 
-    let mut load_best_path = stats_path.clone();
+    let mut best = stats_path.clone();
+    best.push("best_results/");
+    if !best.is_dir() {
+        std::fs::create_dir_all(best.clone()).unwrap();
+    }
+
+    let mut load_best_path = best.clone();
     load_best_path.push("load_best.txt");
-    let mut mat_best_path = stats_path.clone();
+    let mut mat_best_path = best.clone();
     mat_best_path.push("materialization_best.txt");
-    let mut sft_best_path = stats_path.clone();
+    let mut sft_best_path = best.clone();
     sft_best_path.push("save_to_file_best.txt");
 
     write_best_results(load_best_path, load_best);
@@ -237,9 +244,15 @@ pub fn output_figures(output_path: PathBuf) {
         y_label: "Save to File Time (ms)",
     };
 
-    let mut load_file_path = stats_path.clone();
-    let mut mat_file_path = stats_path.clone();
-    let mut save_file_path = stats_path.clone();
+    let mut figures = stats_path.clone();
+    figures.push("figures/");
+
+    if !figures.is_dir() {
+        std::fs::create_dir_all(figures.clone()).unwrap();
+    }
+    let mut load_file_path = figures.clone();
+    let mut mat_file_path = figures.clone();
+    let mut save_file_path = figures.clone();
 
     load_file_path.push("load_time.svg");
     mat_file_path.push("mat_time.svg");
@@ -252,12 +265,14 @@ pub fn output_figures(output_path: PathBuf) {
         vec![save_to_file_time_plot],
         save_to_file_plot_info,
     )
-
-    // Write in a separate file the best computation and the amount of Universities
-
-    // Output: Load Time - Mat time - Save to File per number of workers.
 }
+fn is_peers_folder(entry: &Path) -> bool {
+    let filename = entry.file_name().unwrap().to_str().unwrap();
+    let peers = &filename[0..5];
+    let number = &filename[5..];
 
+    peers == "peers" && number.trim().parse::<usize>().is_ok()
+}
 fn write_best_results<P: AsRef<Path>>(path: P, res: (f64, usize)) {
     // The best Load Time, Materialization time and Save to File Time are written in three separate
     // files for an easier parsing from client
@@ -277,7 +292,7 @@ pub fn open_truncate<P: AsRef<Path>>(path: P) -> std::fs::File {
         // Instead of expecting return a Result<()>
         .expect("Something wrong happened with the ouput file")
 }
-pub fn open_append<P: AsRef<Path>>(path: P) -> std::fs::File {
+pub fn open_append<P: AsRef<Path> + std::fmt::Debug>(path: P) -> std::fs::File {
     OpenOptions::new()
         .read(true)
         .write(true)
@@ -358,12 +373,17 @@ fn get_averaged_data<W: AsRef<Path>>(path: W) -> (f64, f64, f64) {
     )
 }
 
-fn locate_stats_folder(output_path: PathBuf) -> Result<PathBuf, String> {
+fn locate_stats_folder(output_path: PathBuf, update: bool) -> Result<PathBuf, String> {
     // Locate stats directory
     let mut stats_path = output_path.clone();
     // remove peers specific folder. TO BE CHANGED WHEN FIXED OUTPUT FOLDER CONVENTION
-    stats_path.pop();
-    stats_path.push("stats/");
+    // The update flags signals that this is an update and the performance data can be found
+    // in the update_stats folder instead of stats folder
+    if update {
+        stats_path.push("update_stats/");
+    } else {
+        stats_path.push("stats/");
+    }
     if stats_path.as_path().is_dir() {
         Ok(stats_path)
     } else {
@@ -371,11 +391,23 @@ fn locate_stats_folder(output_path: PathBuf) -> Result<PathBuf, String> {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct PlotInfo<'a> {
     pub x_range: Option<(f64, f64)>,
     pub y_range: Option<(f64, f64)>,
     pub x_label: &'a str,
     pub y_label: &'a str,
+}
+
+impl<'a> PlotInfo<'a> {
+    pub fn new() -> Self {
+        Self {
+            x_range: None,
+            y_range: None,
+            x_label: "hey",
+            y_label: "yo",
+        }
+    }
 }
 
 pub struct Plotter {

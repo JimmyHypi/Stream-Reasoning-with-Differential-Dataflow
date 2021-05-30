@@ -150,10 +150,25 @@ impl std::str::FromStr for IncrementalType {
     }
 }
 
+fn get_folder_name(path: std::path::PathBuf) -> String {
+    let mut path_for_folder = path.clone();
+    path_for_folder.pop();
+    let filename = path
+        .file_name()
+        .expect("Could not get file name")
+        .to_str()
+        .expect("Could not get string");
+    let index = filename.find('.').expect("Could not find `.` in path");
+    let result = format!("encoded_data/{}_encoding/", &filename[0..index],);
+    result
+}
 fn write_encoding_time(path: std::path::PathBuf, time: u128) {
     let mut path = path.clone();
+    let file_path = get_folder_name(path.clone());
     path.pop();
-    path.push("encoded_data/encoding_stats");
+    path.push(file_path);
+    path.push("encoding_stats.txt");
+
     let mut file = crate::eval::open_append(path.clone());
 
     let metadata = std::fs::metadata(path.clone()).expect("Could not get metadata");
@@ -167,7 +182,7 @@ fn write_encoding_time(path: std::path::PathBuf, time: u128) {
     let avg_encoding_time = get_avg_encoding_time(path.clone());
 
     path.pop();
-    path.push("average_encoding_time");
+    path.push("average_encoding_time.txt");
     let mut file = crate::eval::open_truncate(path);
     writeln!(file, "Average Encoding Time (ms)\n{}", avg_encoding_time)
         .expect("Could not write average encoding time");
@@ -237,6 +252,7 @@ where
         + 'static,
 {
     let args = Arc::new(Args::from_args());
+    let another_args = Args::from_args();
     let timely_args = get_timely_args(args.clone());
     let timely_params = TimelyParams {
         params: timely_args,
@@ -433,16 +449,41 @@ where
                 save_persistent_time,
             };
 
-            let mut update_stats_path = std::path::PathBuf::from(path);
-            update_stats_path.pop();
-            increm_stats.write_to_file(update_stats_path, Some(index), Some(peers))
+            let update_stats_path = std::path::PathBuf::from(path);
+            let filename = update_stats_path.file_name().unwrap().to_str().unwrap();
+            let len = filename.len();
+            let subfilename = &filename[0..len - 14];
+            let mut out = args.output_folder.clone();
+            out.push("update_stats/");
+            out.push(format!("{}_stats/", subfilename));
+            increm_stats.write_to_file(out, Some(index), Some(peers))
         }
     })?
     // Main thread waits for all the workers to finish job so this guarantees that the evaluation
     // has been written and the main function can proceed an process them.
     .join();
 
+    // Print evaluation of time spent per worker
+    let mut stats_folder = another_args.output_folder.clone();
+    stats_folder.push("stats/");
+    crate::eval::output_figures(stats_folder);
+
+    for path in another_args.incremental_file_paths.clone() {
+        let folder = get_folder(&path.0, &another_args.output_folder);
+        crate::eval::output_figures(folder);
+    }
+
     Ok(())
+}
+
+fn get_folder(buf: &std::path::PathBuf, output: &std::path::PathBuf) -> std::path::PathBuf {
+    let mut result = output.clone();
+    let filename = buf.file_name().unwrap().to_str().unwrap();
+    let index = filename.find('.').expect("Wrong format name of folder");
+    result.push("update_stats/");
+    result.push(format!("{}_stats/", &filename[0..index]));
+    result.push("stats/");
+    result
 }
 
 struct TimelyParams {

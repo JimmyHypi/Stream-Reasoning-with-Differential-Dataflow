@@ -117,10 +117,15 @@ where
             .expect("Could not convert OsStr to str");
 
         let index = path_name.find('.').expect("Could not find `.` in path");
-        let result = format!("encoded_data/{}-encoded.ntenc", &path_name[0..index]);
+        let result = format!(
+            "{}_encoding/{}-encoded.ntenc",
+            &path_name[0..index],
+            &path_name[0..index]
+        );
         // Create encoded_data/ directory
+        let folder = format!("encoded_data/{}_encoding/", &path_name[0..index]);
         path_buf.pop();
-        path_buf.push("encoded_data/");
+        path_buf.push(folder);
         std::fs::create_dir_all(path_buf.clone())
             .expect("Could not create `encoded_data/` directory");
         path_buf.set_file_name(result);
