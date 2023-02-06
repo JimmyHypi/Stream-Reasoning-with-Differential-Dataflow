@@ -2,7 +2,7 @@
 name = "reasoning_service"
 version = "0.1.0"
 authors = ["jimmy_hypi <xhimi.hypi@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [build-dependencies]
 lalrpop = {version = "0.19.1", features = ["lexer"] }
@@ -14,7 +14,7 @@ timely = "0.11.1"
 differential-dataflow = "0.11.0"
 abomonation = "0.7.3"
 abomonation_derive = "0.5.0"
-lalrpop-util = "0.19.1"
+lalrpop-util = { version = "^0.19", features = ["lexer"] }
 regex = "1"
 env_logger = "0.8.2"
 log = "0.4.11"
